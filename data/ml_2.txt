@@ -1,0 +1,3 @@
+Unsupervised Learning deals with unlabeled data and includes techniques like Clustering and Dimensionality Reduction.
+K-Means Clustering groups data points based on similarity, while Principal Component Analysis reduces feature space.
+Deep Learning is a subset of Machine Learning using deep Neural Networks.

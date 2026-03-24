@@ -1,0 +1,3 @@
+Calculus is a branch of mathematics that studies change.
+Differentiation measures the rate of change, while Integration calculates accumulation.
+Limits are fundamental to understanding derivatives and integrals.
