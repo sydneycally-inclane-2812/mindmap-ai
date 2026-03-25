@@ -5,6 +5,10 @@ import sys
 import os
 import importlib.util
 
+# Reduce transformer loading noise in CLI output.
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # Import from components-tbd (which has hyphens, so we need to use importlib)
 def _import_module(module_path, module_name):
     """Helper to import modules from paths with hyphens."""
@@ -27,7 +31,10 @@ chunk_text = documents_ingestion.chunk_text
 FAISSStore = vectorstore.FAISSStore
 
 from sentence_transformers import SentenceTransformer
+from transformers import logging as hf_logging
 from .llm import extract_entities, extract_relationships
+
+hf_logging.set_verbosity_error()
 
 
 def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Dict[str, Any]:
@@ -77,7 +84,7 @@ def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: in
     
     # Step 5: Extract relationships from all chunks
     print("Extracting relationships...")
-    relationships = extract_relationships(all_chunks)
+    relationships = extract_relationships(all_chunks, entities=list(entities_set))
     
     print(f"Extracted {len(entities_set)} entities and {len(relationships)} relationships")
     

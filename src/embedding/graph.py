@@ -2,15 +2,25 @@
 
 from typing import Dict, List, Tuple, Any
 import os
-from neo4j import GraphDatabase, driver
+from neo4j import GraphDatabase
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+homedir = Path(__file__).parent.parent.parent.resolve()
 
-# Neo4j connection configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+load_dotenv(homedir / '.env')
+
+# Neo4j Aura connection configuration (read from .env)
+NEO4J_URI = os.getenv("NEO4J_URI")
+NEO4J_USER = os.getenv("NEO4J_USERNAME")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+if not all([NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD]):
+    raise ValueError(
+        "Neo4j credentials not found in .env. "
+        "Please set NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD. "
+        "For Neo4j Aura, use format: neo4j+s://xxxxx.databases.neo4j.io"
+    )
 
 
 class Neo4jGraphStore:
@@ -18,11 +28,11 @@ class Neo4jGraphStore:
     
     def __init__(self, uri: str = NEO4J_URI, user: str = NEO4J_USER, password: str = NEO4J_PASSWORD):
         """
-        Initialize Neo4j connection.
+        Initialize Neo4j Aura connection.
         
         Args:
-            uri: Neo4j connection URI (e.g., "bolt://localhost:7687")
-            user: Neo4j username
+            uri: Neo4j connection URI (e.g., "neo4j+s://xxxxx.databases.neo4j.io" for Aura)
+            user: Neo4j username (usually "neo4j")
             password: Neo4j password
         """
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
@@ -33,9 +43,13 @@ class Neo4jGraphStore:
         try:
             with self.driver.session() as session:
                 result = session.run("RETURN 1")
-                print("✓ Neo4j connection successful")
+                print("Neo4j connection successful")
         except Exception as e:
-            print(f"✗ Neo4j connection failed: {e}")
+            print(f"Neo4j connection failed: {e}")
+            print("\nTroubleshooting:")
+            print("1. Verify NEO4J_URI is correct (format: neo4j+s://xxxxx.databases.neo4j.io)")
+            print("2. Check NEO4J_USER and NEO4J_PASSWORD in .env")
+            print("3. Ensure your Neo4j Aura instance is running at https://console.neo4j.io")
             raise
     
     def close(self):
@@ -74,19 +88,19 @@ class Neo4jGraphStore:
         """
         with self.driver.session() as session:
             for entity1, relation_type, entity2 in relationships:
-                # Create relationship with type as property
-                cypher = f"""
-                MATCH (e1:Entity {{name: $entity1}})
-                MATCH (e2:Entity {{name: $entity2}})
-                MERGE (e1)-[r:RELATED_TO {{type: $relation_type}}]->(e2)
+                # Upsert endpoint nodes so relationship extraction phrases are not dropped.
+                cypher = """
+                MERGE (e1:Entity {name: $entity1})
+                MERGE (e2:Entity {name: $entity2})
+                MERGE (e1)-[r:RELATED_TO {type: $relation_type}]->(e2)
                 ON CREATE SET r.count = 1
                 ON MATCH SET r.count = r.count + 1
                 """
                 session.run(
                     cypher,
-                    entity1=entity1,
-                    entity2=entity2,
-                    relation_type=relation_type
+                    entity1=str(entity1).strip(),
+                    entity2=str(entity2).strip(),
+                    relation_type=str(relation_type).strip(),
                 )
         print(f"Added {len(relationships)} relationships to graph")
     
@@ -98,17 +112,20 @@ class Neo4jGraphStore:
             
             # Count relationships
             num_edges = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()["count"]
+
+            # Avoid property-key warnings when there are no relationships yet.
+            if num_edges == 0:
+                relation_types = {}
+            else:
+                rel_types = session.run(
+                    "MATCH ()-[r]-() RETURN coalesce(r.type, 'unknown') as type, count(*) as count"
+                ).data()
+                relation_types = {row["type"]: row["count"] for row in rel_types}
             
-            # Get relationship types
-            rel_types = session.run(
-                "MATCH ()-[r]-() RETURN r.type as type, count(*) as count "
-            ).data()
-            relation_types = {row["type"]: row["count"] for row in rel_types}
-            
-            # Get top entities by degree
+            # Get top entities by degree (using COUNT {} syntax for newer Neo4j)
             top_entities = session.run(
                 """MATCH (e:Entity)
-                WITH e, (size((e)-->()) + size((()<--(e)))) as degree
+                WITH e, (COUNT {(e)-[]->()} + COUNT {(e)<-[]-()}) as degree
                 ORDER BY degree DESC LIMIT 5
                 RETURN e.name as name, degree"""
             ).data()

@@ -68,21 +68,37 @@ def query(entity: str, graph_store: Neo4jGraphStore) -> Dict[str, Any]:
             return {
                 "incoming": [],
                 "outgoing": [],
+                "entity": entity,
+                "total_connections": 0,
                 "message": f"Entity '{entity}' not found in graph"
+            }
+
+        # Avoid warning-heavy queries when this node has no relationships.
+        connection_count_row = session.run(
+            "MATCH (e:Entity {name: $name})-[r]-() RETURN count(r) as c",
+            name=entity,
+        ).single()
+        connection_count = connection_count_row["c"] if connection_count_row else 0
+        if connection_count == 0:
+            return {
+                "incoming": [],
+                "outgoing": [],
+                "entity": entity,
+                "total_connections": 0,
             }
         
         # Get incoming relationships
         incoming_results = session.run(
-            """MATCH (source:Entity)-[r:RELATED_TO]->(target:Entity {name: $target})
-            RETURN source.name as source, r.type as type, target.name as target""",
+            """MATCH (source:Entity)-[r]->(target:Entity {name: $target})
+            RETURN source.name as source, coalesce(r.type, 'unknown') as type, target.name as target""",
             target=entity
         ).data()
         incoming = [(row["source"], row["type"], row["target"]) for row in incoming_results]
         
         # Get outgoing relationships
         outgoing_results = session.run(
-            """MATCH (source:Entity {name: $source})-[r:RELATED_TO]->(target:Entity)
-            RETURN source.name as source, r.type as type, target.name as target""",
+            """MATCH (source:Entity {name: $source})-[r]->(target:Entity)
+            RETURN source.name as source, coalesce(r.type, 'unknown') as type, target.name as target""",
             source=entity
         ).data()
         outgoing = [(row["source"], row["type"], row["target"]) for row in outgoing_results]
@@ -172,10 +188,11 @@ def get_graph_summary(graph_store: Neo4jGraphStore) -> Dict[str, Any]:
     stats = graph_store.get_graph_stats()
     
     with graph_store.driver.session() as session:
-        # Calculate avg degree
+        # Calculate avg degree (using COUNT {} syntax for newer Neo4j)
         avg_degree_result = session.run(
             """MATCH (n:Entity)
-            RETURN avg(size((n)-->()) + size((()<--(n)))) as avg_degree"""
+            WITH n, (COUNT {(n)-[]->()} + COUNT {(n)<-[]-()}) as degree
+            RETURN avg(degree) as avg_degree"""
         ).single()
         avg_degree = avg_degree_result["avg_degree"] if avg_degree_result else 0
     
@@ -202,10 +219,12 @@ def get_entity_neighbors(entity: str, graph_store: Neo4jGraphStore, depth: int =
     """
     
     with graph_store.driver.session() as session:
+        # Use variable-length path and extract last relationship type
         result = session.run(
-            f"""MATCH (e:Entity {{name: $name}})-[r:RELATED_TO*1..{depth}]-(neighbor:Entity)
-            RETURN DISTINCT neighbor.name as neighbor, 
-                   min(r.type) as relation_type
+            f"""MATCH (e:Entity {{name: $name}})-[rels*1..{depth}]-(neighbor:Entity)
+            WITH DISTINCT neighbor, 
+                 coalesce(rels[-1].type, 'unknown') as relation_type
+            RETURN neighbor.name as neighbor, relation_type
             ORDER BY neighbor""",
             name=entity
         ).data()

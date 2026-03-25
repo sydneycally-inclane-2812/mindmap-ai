@@ -2,14 +2,17 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
+
+# Add workspace root to path so we can import src.embedding
+workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, workspace_root)
 
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-from embedding import ingest, query, get_graph_summary, query_batch, get_entity_neighbors
+from src.embedding import ingest, query, get_graph_summary, query_batch, get_entity_neighbors
 
 
 def main():
