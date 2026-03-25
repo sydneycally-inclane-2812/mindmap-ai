@@ -8,3 +8,5 @@ langchain-community
 langchain-text-splitters
 pypdf
 numpy
+groq
+python-dotenv
