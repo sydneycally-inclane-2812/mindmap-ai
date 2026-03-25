@@ -4,10 +4,9 @@ pyvis
 matplotlib
 sentence-transformers
 faiss-cpu
-langchain
-langchain-community
-langchain-text-splitters
-pymupdf
+pypdf
 numpy
-python-pptx
-python-docx
+groq
+python-dotenv
+PyYAML
+duckdb

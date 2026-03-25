@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 
 # C extensions
 *.so
@@ -68,4 +69,7 @@ dmypy.json
 
 # Streamlit
 .streamlit/
-
+.env
+**/vector_storage/
+**/*.log
+**/databases/*
