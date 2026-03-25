@@ -69,3 +69,4 @@ dmypy.json
 # Streamlit
 .streamlit/
 .env
+**/vector_storage/

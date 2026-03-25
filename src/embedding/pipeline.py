@@ -1,8 +1,11 @@
 """Pipeline orchestration with Neo4j: ingest documents and query graph."""
 
 from typing import List, Dict, Any, Tuple, Optional
+import logging
 from .preprocessing import preprocessing
 from .graph import build_graph, Neo4jGraphStore
+
+logger = logging.getLogger(__name__)
 
 
 def ingest(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Neo4jGraphStore:
@@ -18,21 +21,17 @@ def ingest(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100
         Neo4jGraphStore: Connected graph database
     """
     
-    print("=" * 60)
-    print("Starting ingestion pipeline...")
-    print("=" * 60)
+    logger.info("Starting ingestion pipeline...")
     
     # Step 1: Preprocess
-    print("\n[Step 1] Preprocessing documents...")
+    logger.info("Preprocessing documents...")
     processed_data = preprocessing(documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     
     # Step 2: Build graph in Neo4j
-    print("\n[Step 2] Building graph in Neo4j...")
+    logger.info("Building graph in Neo4j...")
     graph_store = build_graph(processed_data)
     
-    print("\n" + "=" * 60)
-    print("Ingestion pipeline complete!")
-    print("=" * 60)
+    logger.info("Ingestion pipeline complete!")
     
     return graph_store
 
@@ -219,25 +218,62 @@ def get_entity_neighbors(entity: str, graph_store: Neo4jGraphStore, depth: int =
     """
     
     with graph_store.driver.session() as session:
-        # Use a static query string (for neo4j driver typing) and parameterized depth filter.
+        # Return per-path details so callers can distinguish direct vs indirect neighbors.
         result = session.run(
             """
             MATCH path = (e:Entity {name: $name})-[rels*1..]-(neighbor:Entity)
             WHERE length(path) <= $depth
-            WITH DISTINCT neighbor, coalesce(rels[-1].type, 'unknown') as relation_type
-            RETURN neighbor.name as neighbor, relation_type
+            WITH neighbor,
+                 length(path) as hops,
+                 [n IN nodes(path) | n.name] as node_path,
+                 [r IN rels | coalesce(r.type, 'unknown')] as relation_path
+            RETURN neighbor.name as neighbor,
+                   collect(DISTINCT {
+                       hops: hops,
+                       node_path: node_path,
+                       relation_path: relation_path
+                   }) as paths
             ORDER BY neighbor
             """,
             name=entity,
             depth=depth,
         ).data()
-        
-        neighbors = [(row["neighbor"], row["relation_type"]) for row in result]
-        
+
+        neighbors = []
+        details = {}
+        for row in result:
+            neighbor_name = row["neighbor"]
+            path_details = row["paths"]
+
+            # Aggregate unique relation labels for quick summary.
+            rel_types = sorted(
+                {
+                    rel
+                    for path in path_details
+                    for rel in path.get("relation_path", [])
+                }
+            )
+
+            normalized_paths = []
+            for path in path_details:
+                node_path = path.get("node_path", [])
+                normalized_paths.append(
+                    {
+                        "hops": path.get("hops", len(node_path) - 1),
+                        "path": node_path,
+                        "via": node_path[1:-1] if len(node_path) > 2 else [],
+                        "relation_types": path.get("relation_path", []),
+                    }
+                )
+
+            neighbors.append((neighbor_name, rel_types))
+            details[neighbor_name] = normalized_paths
+
         return {
             "entity": entity,
             "neighbors": neighbors,
+            "details": details,
             "num_neighbors": len(neighbors),
-            "depth": depth
+            "depth": depth,
         }
 

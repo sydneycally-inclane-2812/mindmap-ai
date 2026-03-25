@@ -2,9 +2,12 @@
 
 from typing import Dict, List, Tuple, Any
 import os
+import logging
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 homedir = Path(__file__).parent.parent.parent.resolve()
 
@@ -37,28 +40,28 @@ class Neo4jGraphStore:
         """
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.session = None
-        print(f"Connecting to Neo4j at {uri}")
+        logger.info("Connecting to Neo4j at %s", uri)
         
         # Test connection
         try:
             with self.driver.session() as session:
                 session.run("RETURN 1")
-                print("Neo4j connection successful")
+                logger.info("Neo4j connection successful")
         except Exception as e:
-            print(f"Neo4j connection failed: {e}")
+            logger.error("Neo4j connection failed: %s", e)
             raise
     
     def close(self):
         """Close Neo4j connection."""
         if self.driver:
             self.driver.close()
-            print("Neo4j connection closed")
+            logger.info("Neo4j connection closed")
     
     def clear_graph(self):
         """Clear all nodes and relationships from database."""
         with self.driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
-        print("Graph cleared")
+        logger.info("Graph cleared")
     
     def add_entities(self, entities: set):
         """
@@ -73,7 +76,7 @@ class Neo4jGraphStore:
                     "MERGE (e:Entity {name: $name})",
                     name=entity
                 )
-        print(f"Added {len(entities)} entities to graph")
+        logger.info("Added %s entities to graph", len(entities))
     
     def add_relationships(self, relationships: List[Tuple[str, str, str]]):
         """
@@ -98,7 +101,7 @@ class Neo4jGraphStore:
                     entity2=str(entity2).strip(),
                     relation_type=str(relation_type).strip(),
                 )
-        print(f"Added {len(relationships)} relationships to graph")
+            logger.info("Added %s relationships to graph", len(relationships))
     
     def get_graph_stats(self) -> Dict[str, Any]:
         """Get statistics about the graph."""
@@ -159,13 +162,17 @@ def build_graph(processed_data: Dict[str, Any], graph_store: Neo4jGraphStore = N
     graph_store.clear_graph()
     
     # Add entities and relationships
-    print(f"Building graph with {len(entities)} entities and {len(relationships)} relationships...")
+    logger.info(
+        "Building graph with %s entities and %s relationships...",
+        len(entities),
+        len(relationships),
+    )
     graph_store.add_entities(entities)
     graph_store.add_relationships(relationships)
     
     # Print stats
     stats = graph_store.get_graph_stats()
-    print(f"Graph built: {stats['num_nodes']} nodes, {stats['num_edges']} edges")
+    logger.info("Graph built: %s nodes, %s edges", stats["num_nodes"], stats["num_edges"])
     
     return graph_store
 

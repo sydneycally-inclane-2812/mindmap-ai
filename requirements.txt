@@ -10,3 +10,5 @@ pypdf
 numpy
 groq
 python-dotenv
+PyYAML
+duckdb

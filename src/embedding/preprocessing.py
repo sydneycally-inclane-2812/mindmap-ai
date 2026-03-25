@@ -4,29 +4,23 @@ from typing import List, Dict, Any
 import sys
 import os
 import importlib.util
+import logging
 import faiss
 import numpy as np
 
 import os
 import pickle
 
+from sentence_transformers import SentenceTransformer
+from transformers import logging as hf_logging
+from .llm import extract_entities, extract_relationships_with_evidence
+from .evidence_store import EvidenceDuckDBStore
+
+hf_logging.set_verbosity_error()
+logger = logging.getLogger(__name__)
 # Reduce transformer loading noise in CLI output.
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 # os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-# Import from components-tbd (which has hyphens, so we need to use importlib)
-def _import_module(module_path, module_name):
-    """Helper to import modules from paths with hyphens."""
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-base_path = os.path.join(os.path.dirname(__file__), '../..')
-documents_ingestion = _import_module(
-    os.path.join(base_path, 'components-tbd', 'documents_ingestion.py'),
-    'documents_ingestion'
-)
 
 class FAISSStore:
     def __init__(self, dim, storage_dir="vectorstorage", name="faiss_index"):
@@ -75,11 +69,7 @@ def chunk_text(text, chunk_size=500, chunk_overlap=100):
 	)
 	return splitter.split_text(text)
 
-from sentence_transformers import SentenceTransformer
-from transformers import logging as hf_logging
-from .llm import extract_entities, extract_relationships
 
-hf_logging.set_verbosity_error()
 
 def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Dict[str, Any]:
     """
@@ -103,39 +93,68 @@ def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: in
         raise ValueError("No documents provided")
     
     # Step 1: Chunk all documents
-    print("Chunking documents...")
+    logger.info("Chunking documents...")
     all_chunks = []
-    for doc in documents:
+    chunk_records = []
+    for doc_idx, doc in enumerate(documents):
         chunks = chunk_text(doc, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        all_chunks.extend(chunks)
+        for chunk_idx, chunk in enumerate(chunks):
+            chunk_id = f"doc_{doc_idx}_chunk_{chunk_idx}"
+            all_chunks.append(chunk)
+            chunk_records.append(
+                {
+                    "chunk_id": chunk_id,
+                    "document_id": f"doc_{doc_idx}",
+                    "chunk_text": chunk,
+                    "chunk_order": chunk_idx,
+                }
+            )
     
-    print(f"Created {len(all_chunks)} chunks")
+    logger.info("Created %s chunks", len(all_chunks))
     
     # Step 2: Embed chunks
-    print("Embedding chunks...")
+    logger.info("Embedding chunks...")
     embed_model = SentenceTransformer("all-MiniLM-L6-v2")
     embeddings = embed_model.encode(all_chunks, convert_to_numpy=True)
     
     # Step 3: Store embeddings in FAISS
-    print("Storing embeddings in FAISS...")
-    faiss_store = FAISSStore(dim=embeddings.shape[1], storage_dir="vectorstorage", name="faiss_index")
+    logger.info("Storing embeddings in FAISS...")
+    faiss_store = FAISSStore(dim=embeddings.shape[1], storage_dir="vector_storage", name="faiss_index")
     faiss_store.add(embeddings, all_chunks)
     
     # Step 4: Extract entities from all chunks
-    print("Extracting entities...")
+    logger.info("Extracting entities...")
     entities_list = extract_entities(all_chunks)
     entities_set = set(entities_list)
     
     # Step 5: Extract relationships from all chunks
-    print("Extracting relationships...")
-    relationships = extract_relationships(all_chunks, entities=list(entities_set))
+    logger.info("Extracting relationships...")
+    relation_records = extract_relationships_with_evidence(all_chunks, entities=list(entities_set))
+    relationships = [(r["source"], r["relation"], r["target"]) for r in relation_records]
+
+    # Step 6: Persist evidence and relation provenance in DuckDB
+    logger.info("Persisting evidence in DuckDB...")
+    evidence_store = EvidenceDuckDBStore(db_path="data/evidence.duckdb")
+    evidence_store.store_ingestion(
+        documents=documents,
+        chunks=chunk_records,
+        entities=sorted(entities_set),
+        relation_records=relation_records,
+    )
+    evidence_store.close()
     
-    print(f"Extracted {len(entities_set)} entities and {len(relationships)} relationships")
+    logger.info(
+        "Extracted %s entities and %s relationships",
+        len(entities_set),
+        len(relationships),
+    )
     
     return {
         "chunks": all_chunks,
+        "chunk_records": chunk_records,
         "embeddings": embeddings,
         "entities": entities_set,
         "relationships": relationships,
+        "relation_records": relation_records,
         "faiss_store": faiss_store,
     }

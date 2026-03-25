@@ -2,7 +2,8 @@
 
 import json
 import os
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import logging
 
 from groq import Groq
 from dotenv import load_dotenv
@@ -16,6 +17,7 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in environment. Please set it in .env file.")
 
 client = Groq(api_key=GROQ_API_KEY)
+logger = logging.getLogger(__name__)
 
 # Fixed taxonomy of relationship types
 RELATIONSHIP_TYPES = {
@@ -34,6 +36,7 @@ RELATIONSHIP_TYPES = {
 # Simple in-memory cache to avoid duplicate API calls
 _entity_cache = {}
 _relationship_cache = {}
+_relationship_evidence_cache = {}
 
 
 def _extract_json_payload(raw_text: str) -> str:
@@ -122,13 +125,13 @@ Entities (as JSON array):"""
     try:
         message = client.chat.completions.create(
             model=model,
-            max_tokens=256,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt}
             ]
         )
         
-        response_text = message.choices[0].message.content.strip()
+        response_text = (message.choices[0].message.content or "").strip()
         json_text = _extract_json_payload(response_text)
         
         # Parse JSON response
@@ -139,25 +142,25 @@ Entities (as JSON array):"""
         # Deduplicate
         entities = list(set(entities))
         
-        print(f"[DEBUG] Extracted {len(entities)} entities")
+        logger.debug("Extracted %s entities", len(entities))
         
         # Cache result
         _entity_cache[cache_key] = entities
         return entities
         
     except json.JSONDecodeError as e:
-        print(f"Warning: Failed to parse entity extraction response: {response_text}")
-        print(f"JSON Error: {e}")
+        logger.warning("Failed to parse entity extraction response: %s", response_text)
+        logger.warning("JSON Error: %s", e)
         return []
     except Exception as e:
-        print(f"Error extracting entities: {e}")
+        logger.error("Error extracting entities: %s", e)
         return []
 
 
 def extract_relationships(
     texts: List[str],
     model: str = "meta-llama/llama-4-scout-17b-16e-instruct",
-    entities: List[str] = None,
+    entities: Optional[List[str]] = None,
 ) -> List[Tuple[str, str, str]]:
     """
     Extract typed relationships (subject, relation_type, object) from text chunks using Groq LLM.
@@ -169,93 +172,118 @@ def extract_relationships(
     Returns:
         List of (entity1, relationship_type, entity2) tuples
     """
+    records = extract_relationships_with_evidence(texts=texts, model=model, entities=entities)
+    return [(r["source"], r["relation"], r["target"]) for r in records]
+
+
+def extract_relationships_with_evidence(
+    texts: List[str],
+    model: str = "meta-llama/llama-4-scout-17b-16e-instruct",
+    entities: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Extract relationships with short evidence snippets and confidence."""
     if not texts:
         return []
-    
-    # Create cache key
-    cache_key = hash(tuple(texts))
-    if cache_key in _relationship_cache:
-        return _relationship_cache[cache_key]
-    
-    # Combine texts
-    combined_text = "\n\n".join(texts[:5])  # Limit to first 5 chunks
-    
+
+    cache_key = hash((tuple(texts), tuple(sorted(entities or []))))
+    if cache_key in _relationship_evidence_cache:
+        return _relationship_evidence_cache[cache_key]
+
+    combined_text = "\n\n".join(texts[:5])
     relation_types_str = ", ".join(sorted(RELATIONSHIP_TYPES))
     entity_constraint = ""
     if entities:
         canonical_entities = sorted({str(e).strip() for e in entities if str(e).strip()})
         entity_constraint = (
-            "\nUse ONLY entities from this canonical list for entity1 and entity2. "
+            "\nUse ONLY entities from this canonical list for source and target. "
             "Do not invent new entity names.\n"
             f"Canonical entities: {json.dumps(canonical_entities)}\n"
         )
 
-    prompt = f"""Extract relationships from the following text in the format (entity1, relationship_type, entity2).
-Use ONLY these relationship types: {relation_types_str}. Do not use any other types of relationships.
+    prompt = f"""Extract relations from the text.
+Use ONLY these relation types: {relation_types_str}.
 {entity_constraint}
 
-Return ONLY a JSON array of triplets, no explanations.
-Example response format: [["Entity1", "relies_on", "Entity2"], ["Entity3", "requires", "Entity4"]]
+Return ONLY a JSON array of objects, each object must contain:
+- source (string)
+- relation (string)
+- target (string)
+- evidence (short supporting quote or snippet, max 20 words)
+- confidence (number from 0 to 1)
+
+Example:
+[
+  {{"source": "marketing", "relation": "relies_on", "target": "social_media", "evidence": "Marketing relies heavily on social media platforms.", "confidence": 0.92}}
+]
 
 Text:
 {combined_text}
+"""
 
-Relationships (as JSON array, DO NOT USE RELATIONSHIPS OUTSIDE OF THE LIST GIVEN):"""
-    
     try:
         message = client.chat.completions.create(
             model=model,
-            max_tokens=512,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
         )
-        
-        response_text = message.choices[0].message.content.strip()
+
+        response_text = (message.choices[0].message.content or "").strip()
         json_text = _extract_json_payload(response_text)
-        print(f"[DEBUG] Relationship raw response (first 200 chars): {response_text[:200]}")
-        
-        # Parse JSON response
-        relationships = json.loads(json_text)
-        if not isinstance(relationships, list):
-            relationships = [relationships]
-        
-        print(f"[DEBUG] Raw relationships count: {len(relationships)}")
-        if relationships:
-            print(f"[DEBUG] First raw relationship: {relationships[0]}")
-        
-        # Validate and filter relationships
-        validated = []
-        for rel in relationships:
-            if isinstance(rel, list) and len(rel) == 3:
-                entity1, rel_type, entity2 = rel
-                normalized_rel_type = _normalize_relation_type(rel_type)
-                print(
-                    f"[DEBUG] Checking relationship: {entity1} -{normalized_rel_type}-> {entity2}, "
-                    f"type in set: {normalized_rel_type in RELATIONSHIP_TYPES}"
+        logger.debug("Relationship+evidence raw response (first 200 chars): %s", response_text[:200])
+
+        raw_records = json.loads(json_text)
+        if not isinstance(raw_records, list):
+            raw_records = [raw_records]
+
+        validated: List[Dict[str, Any]] = []
+        for rec in raw_records:
+            if not isinstance(rec, dict):
+                continue
+
+            source = str(rec.get("source", "")).strip()
+            target = str(rec.get("target", "")).strip()
+            rel_type = _normalize_relation_type(str(rec.get("relation", "")).strip())
+            evidence = str(rec.get("evidence", "")).strip()
+            confidence = rec.get("confidence", 0.0)
+
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+
+            if source and target and rel_type in RELATIONSHIP_TYPES:
+                validated.append(
+                    {
+                        "source": source,
+                        "relation": rel_type,
+                        "target": target,
+                        "evidence": evidence,
+                        "confidence": confidence,
+                    }
                 )
-                if normalized_rel_type in RELATIONSHIP_TYPES:
-                    validated.append((str(entity1), normalized_rel_type, str(entity2)))
-        
-        print(f"[DEBUG] Extracted {len(validated)} valid relationships from {len(relationships)} raw")
-        
-        # Cache result
-        _relationship_cache[cache_key] = validated
+
+        logger.debug("Extracted %s relation-evidence records", len(validated))
+
+        _relationship_evidence_cache[cache_key] = validated
+        # Keep backward-compatible tuple cache too.
+        _relationship_cache[hash(tuple(texts))] = [
+            (r["source"], r["relation"], r["target"]) for r in validated
+        ]
         return validated
-        
+
     except json.JSONDecodeError as e:
-        print(f"[DEBUG] JSON parse error: {e}")
-        print(f"[DEBUG] Response text: {response_text}")
+        logger.debug("JSON parse error for relation evidence: %s", e)
+        logger.debug("Response text: %s", response_text)
         return []
     except Exception as e:
-        print(f"Error extracting relationships: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("Error extracting relationships with evidence: %s", e)
         return []
 
 
 def clear_cache():
     """Clear the in-memory caches."""
-    global _entity_cache, _relationship_cache
+    global _entity_cache, _relationship_cache, _relationship_evidence_cache
     _entity_cache.clear()
     _relationship_cache.clear()
+    _relationship_evidence_cache.clear()
