@@ -1,14 +1,41 @@
 from collections import defaultdict
 from typing import Dict, List
-from src.utils.graph_helpers import normalize_text
+from src.utils.graph_helpers import normalize_text, dedupe_edges, dedupe_nodes
 
 
-def generate_study_outputs(mindmap_data: Dict) -> Dict:
-    center = normalize_text(mindmap_data.get("center"))
-    edges = mindmap_data.get("edges", [])
+MAIN_BRANCH_LIMIT = 6
+CHILDREN_PER_BRANCH_LIMIT = 3
 
-    branches = []
-    children_by_branch = defaultdict(list)
+LABEL_RANK = {
+    "defines": 0,
+    "contains": 1,
+    "part of": 2,
+    "type of": 3,
+    "example of": 4,
+    "depends on": 5,
+    "formula for": 6,
+    "related to": 7,
+}
+
+
+def rank_label(label: str) -> int:
+    return LABEL_RANK.get(normalize_text(label).lower(), 99)
+
+
+def structure_as_study_mindmap(data: Dict) -> Dict:
+    center = normalize_text(data.get("center"))
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+
+    if not center or not edges:
+        return {
+            "nodes": dedupe_nodes(nodes),
+            "edges": dedupe_edges(edges),
+            "center": center,
+        }
+
+    first_level = []
+    second_level_candidates = defaultdict(list)
 
     for edge in edges:
         source = normalize_text(edge["source"])
@@ -16,68 +43,79 @@ def generate_study_outputs(mindmap_data: Dict) -> Dict:
         label = normalize_text(edge.get("label", "related to"))
 
         if source == center:
-            branches.append((target, label))
-        else:
-            children_by_branch[source].append((target, label))
+            first_level.append({"branch": target, "label": label})
+        elif target == center:
+            first_level.append({"branch": source, "label": label})
 
-    branch_names = [b[0] for b in branches]
+    first_level = sorted(first_level, key=lambda x: rank_label(x["label"]))
 
-    key_topics = branch_names
-
-    revision_bullets = []
-    for branch in branch_names:
-        children = children_by_branch.get(branch, [])
-        if children:
-            child_names = ", ".join([c[0] for c in children[:3]])
-            revision_bullets.append(f"{branch}: {child_names}")
-        else:
-            revision_bullets.append(f"{branch}: main concept branch")
-
-    summary = build_summary(center, branch_names, children_by_branch)
-
-    important_concepts = []
-    for branch in branch_names:
-        important_concepts.append(branch)
-        for child, _ in children_by_branch.get(branch, [])[:2]:
-            important_concepts.append(child)
-
-    # remove duplicates preserving order
     seen = set()
-    unique_concepts = []
-    for concept in important_concepts:
-        c = concept.lower()
-        if c not in seen:
-            seen.add(c)
-            unique_concepts.append(concept)
+    unique_first_level = []
+    for item in first_level:
+        branch = item["branch"]
+        if branch.lower() not in seen:
+            seen.add(branch.lower())
+            unique_first_level.append(item)
+
+    unique_first_level = unique_first_level[:MAIN_BRANCH_LIMIT]
+    branch_names = {item["branch"] for item in unique_first_level}
+
+    for edge in edges:
+        source = normalize_text(edge["source"])
+        target = normalize_text(edge["target"])
+        label = normalize_text(edge.get("label", "related to"))
+
+        for branch in branch_names:
+            if source == branch and target != center:
+                second_level_candidates[branch].append({"child": target, "label": label})
+            elif target == branch and source != center:
+                second_level_candidates[branch].append({"child": source, "label": label})
+
+    structured_edges = []
+    structured_nodes = [center]
+
+    for item in unique_first_level:
+        branch = item["branch"]
+        label = item["label"] or "contains"
+
+        structured_nodes.append(branch)
+        structured_edges.append({
+            "source": center,
+            "target": branch,
+            "label": label,
+        })
+
+    for branch, children in second_level_candidates.items():
+        children = sorted(children, key=lambda x: rank_label(x["label"]))
+
+        seen_children = set()
+        kept = 0
+
+        for child_item in children:
+            child = child_item["child"]
+            label = child_item["label"] or "contains"
+
+            if child.lower() in seen_children:
+                continue
+            if child.lower() == center.lower():
+                continue
+            if child.lower() == branch.lower():
+                continue
+
+            seen_children.add(child.lower())
+            structured_nodes.append(child)
+            structured_edges.append({
+                "source": branch,
+                "target": child,
+                "label": label,
+            })
+            kept += 1
+
+            if kept >= CHILDREN_PER_BRANCH_LIMIT:
+                break
 
     return {
-        "key_topics": key_topics,
-        "summary": summary,
-        "important_concepts": unique_concepts[:12],
-        "revision_bullets": revision_bullets
+        "nodes": dedupe_nodes(structured_nodes),
+        "edges": dedupe_edges(structured_edges),
+        "center": center,
     }
-
-
-def build_summary(center: str, branch_names: List[str], children_by_branch: Dict[str, List]) -> str:
-    if not center:
-        return "No clear central topic was identified."
-
-    if not branch_names:
-        return f"The main topic appears to be {center}, but the graph does not yet contain enough structured branches."
-
-    summary_parts = [f"This mind map is centered on {center}."]
-    summary_parts.append(
-        f"The main branches are {', '.join(branch_names[:6])}."
-    )
-
-    detailed_parts = []
-    for branch in branch_names[:3]:
-        children = children_by_branch.get(branch, [])
-        if children:
-            child_names = ", ".join([c[0] for c in children[:3]])
-            detailed_parts.append(f"{branch} connects to {child_names}")
-
-    if detailed_parts:
-        summary_parts.append("Key supporting links include " + "; ".join(detailed_parts) + ".")
-
-    return " ".join(summary_parts)

@@ -22,6 +22,8 @@ from src.interface.layout import (
     render_sidebar_settings,
     render_status_box,
     render_upload_section,
+    render_uploaded_files_summary,
+    render_results_intro,
 )
 from src.interface.state import (
     APP_STATE_FILES_UPLOADED,
@@ -233,36 +235,53 @@ def render_study_outputs(study_outputs: Optional[dict]) -> None:
         close_card()
         return
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Summary", "Key Topics", "Important Concepts", "Revision Bullets"]
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Summary", "Key Topics", "Important Concepts", "Revision Bullets", "Quick Revision"]
     )
 
     with tab1:
         st.write(study_outputs.get("summary", "No summary available."))
 
+        definitions = study_outputs.get("definitions", [])
+        examples = study_outputs.get("examples", [])
+        dependencies = study_outputs.get("dependencies", [])
+        formulas = study_outputs.get("formulas", [])
+
+        if definitions:
+            st.markdown("**Definitions**")
+            for item in definitions:
+                st.markdown(f"- {item}")
+
+        if examples:
+            st.markdown("**Examples**")
+            for item in examples:
+                st.markdown(f"- {item}")
+
+        if dependencies:
+            st.markdown("**Dependencies**")
+            for item in dependencies:
+                st.markdown(f"- {item}")
+
+        if formulas:
+            st.markdown("**Formulas**")
+            for item in formulas:
+                st.markdown(f"- {item}")
+
     with tab2:
-        key_topics = study_outputs.get("key_topics", [])
-        if key_topics:
-            for topic in key_topics:
-                st.markdown(f"- {topic}")
-        else:
-            st.write("No key topics available.")
+        for topic in study_outputs.get("key_topics", []):
+            st.markdown(f"- {topic}")
 
     with tab3:
-        concepts = study_outputs.get("important_concepts", [])
-        if concepts:
-            for concept in concepts:
-                st.markdown(f"- {concept}")
-        else:
-            st.write("No important concepts available.")
+        for concept in study_outputs.get("important_concepts", []):
+            st.markdown(f"- {concept}")
 
     with tab4:
-        bullets = study_outputs.get("revision_bullets", [])
-        if bullets:
-            for bullet in bullets:
-                st.markdown(f"- {bullet}")
-        else:
-            st.write("No revision bullets available.")
+        for bullet in study_outputs.get("revision_bullets", []):
+            st.markdown(f"- {bullet}")
+
+    with tab5:
+        for line in study_outputs.get("quick_revision", []):
+            st.markdown(f"- {line}")
 
     close_card()
 
@@ -339,7 +358,7 @@ def main() -> None:
     close_card()
 
     if extracted_docs:
-        render_uploaded_files_preview(extracted_docs)
+        render_uploaded_files_summary([doc["name"] for doc in extracted_docs])
 
     if generate_clicked:
         if not uploaded_files:
@@ -402,6 +421,7 @@ def main() -> None:
     documents_from_state = state.metadata.get("documents", [])
 
     if state.status == APP_STATE_GRAPH_READY and state.structured_data:
+        render_results_intro()
         tab1, tab2, tab3 = st.tabs(["Mind Map", "Study Outputs", "Source Preview"])
 
         with tab1:
