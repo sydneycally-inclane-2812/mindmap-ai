@@ -1,6 +1,7 @@
 streamlit
 networkx
 pyvis
+matplotlib
 sentence-transformers
 faiss-cpu
 langchain
