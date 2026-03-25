@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional
+from src.embedding.pipeline import query
 from src.utils.graph_helpers import (
     normalize_text,
     safe_label,
@@ -261,3 +262,19 @@ def dat_result_to_mindmap_data(
         "edges": pruned_edges,
         "center": resolved_center,
     }
+
+def build_mindmap_from_entity(entity: str, graph_store) -> Dict[str, List[dict]]:
+    """
+    Query Dat's graph using a single entity and convert the result
+    into the UI-ready graph format.
+    """
+    query_result = query(entity, graph_store)
+
+    # Convert tuples to dicts for incoming and outgoing
+    for direction in ["incoming", "outgoing"]:
+        if direction in query_result and query_result[direction]:
+            query_result[direction] = [
+                {"source": t[0], "label": t[1], "target": t[2]} for t in query_result[direction]
+            ]
+
+    return dat_result_to_mindmap_data(query_result)

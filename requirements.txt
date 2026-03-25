@@ -10,3 +10,4 @@ groq
 python-dotenv
 PyYAML
 duckdb
+neo4j
