@@ -70,3 +70,5 @@ dmypy.json
 .streamlit/
 .env
 **/vector_storage/
+**/*.log
+**/databases/*

@@ -2,11 +2,13 @@
 
 from typing import List, Dict, Any, Tuple, Optional
 import logging
+import duckdb
+from pathlib import Path
 from .preprocessing import preprocessing
 from .graph import build_graph, Neo4jGraphStore
-
+import os
 logger = logging.getLogger(__name__)
-
+workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def ingest(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Neo4jGraphStore:
     """
@@ -23,13 +25,24 @@ def ingest(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100
     
     logger.info("Starting ingestion pipeline...")
     
-    # Step 1: Preprocess
+    graph_store = Neo4jGraphStore()
+
+    # Step 1: Pull existing graph entities to guide extraction.
+    existing_entities = graph_store.list_entities()
+    logger.info("Loaded %s existing entities from Neo4j", len(existing_entities))
+
+    # Step 2: Preprocess
     logger.info("Preprocessing documents...")
-    processed_data = preprocessing(documents, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    processed_data = preprocessing(
+        documents,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        seed_entities=existing_entities,
+    )
     
-    # Step 2: Build graph in Neo4j
+    # Step 3: Build graph in Neo4j
     logger.info("Building graph in Neo4j...")
-    graph_store = build_graph(processed_data)
+    graph_store = build_graph(processed_data, graph_store=graph_store)
     
     logger.info("Ingestion pipeline complete!")
     
@@ -277,3 +290,59 @@ def get_entity_neighbors(entity: str, graph_store: Neo4jGraphStore, depth: int =
             "depth": depth,
         }
 
+def get_evidence_for_entity(entity: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Return relation evidence snippets for an entity from DuckDB."""
+    evidence_db_path = Path(workspace_root) / "databases" / "evidence.duckdb"
+    if not evidence_db_path.exists():
+        logger.debug("Evidence DB not found at %s", evidence_db_path)
+        return []
+
+    with duckdb.connect(str(evidence_db_path), read_only=True) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                r.source_canonical_name AS source,
+                r.relation_type AS relation,
+                r.target_canonical_name AS target,
+                max(coalesce(re.support_score, 0.0)) AS score,
+                coalesce(re.evidence_text, '') AS evidence
+            FROM relations r
+            JOIN relation_evidence re ON r.relation_id = re.relation_id
+            WHERE lower(r.source_canonical_name) = lower(?)
+               OR lower(r.target_canonical_name) = lower(?)
+            GROUP BY source, relation, target, evidence
+            ORDER BY score DESC, source, relation, target
+            LIMIT ?
+            """,
+            [entity, entity, limit],
+        ).fetchall()
+
+    return [
+        {
+            "source": source,
+            "relation": relation,
+            "target": target,
+            "score": float(score or 0.0),
+            "evidence": evidence or "",
+        }
+        for source, relation, target, score, evidence in rows
+    ]
+
+
+def show_evidence_for_entity(entity: str, limit: int = 10) -> None:
+    """Backwards-compatible logger view for entity evidence."""
+    evidence_rows = get_evidence_for_entity(entity, limit=limit)
+    if not evidence_rows:
+        logger.debug("  No evidence found for '%s'", entity)
+        return
+
+    logger.debug("Evidence for '%s' (top %s):", entity, len(evidence_rows))
+    for row in evidence_rows:
+        logger.debug(
+            "  %s --[%s]--> %s (score=%.2f)",
+            row["source"],
+            row["relation"],
+            row["target"],
+            row["score"],
+        )
+        logger.debug("    evidence: %s", row["evidence"] or "(empty)")

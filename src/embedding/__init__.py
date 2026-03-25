@@ -6,6 +6,8 @@ from .pipeline import (
     get_shortest_path,
     get_graph_summary,
     get_entity_neighbors,
+    get_evidence_for_entity,
+    show_evidence_for_entity,
 )
 from .graph import Neo4jGraphStore
 
@@ -16,5 +18,7 @@ __all__ = [
     "get_shortest_path",
     "get_graph_summary",
     "get_entity_neighbors",
+    "get_evidence_for_entity",
     "Neo4jGraphStore",
+    "show_evidence_for_entity",
 ]

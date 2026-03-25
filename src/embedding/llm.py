@@ -39,6 +39,35 @@ _relationship_cache = {}
 _relationship_evidence_cache = {}
 
 
+def _batch_texts(texts: List[str], batch_size: int) -> List[List[str]]:
+    """Split a list of chunks into fixed-size batches."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    return [texts[idx : idx + batch_size] for idx in range(0, len(texts), batch_size)]
+
+
+def _filter_entities_for_batch(
+    text: str,
+    entities: List[str],
+    max_entities: int = 80,
+) -> List[str]:
+    """Select a bounded subset of entities likely relevant to this text batch."""
+    if not text or not entities:
+        return []
+
+    lowered_text = text.casefold()
+    matched = []
+    for entity in entities:
+        normalized = str(entity).strip()
+        if not normalized:
+            continue
+        if normalized.casefold() in lowered_text:
+            matched.append(normalized)
+        if len(matched) >= max_entities:
+            break
+    return matched
+
+
 def _extract_json_payload(raw_text: str) -> str:
     """Extract a JSON payload from raw model output.
 
@@ -90,7 +119,12 @@ def _normalize_relation_type(rel_type: str) -> str:
     return normalized
 
 
-def extract_entities(texts: List[str], model: str = "meta-llama/llama-4-scout-17b-16e-instruct") -> List[str]:
+def extract_entities(
+    texts: List[str],
+    model: str = "meta-llama/llama-4-scout-17b-16e-instruct",
+    batch_size: int = 4,
+    seed_entities: Optional[List[str]] = None,
+) -> List[str]:
     """
     Extract top entities from a list of text chunks using Groq LLM.
     
@@ -105,14 +139,28 @@ def extract_entities(texts: List[str], model: str = "meta-llama/llama-4-scout-17
         return []
     
     # Create cache key
-    cache_key = hash(tuple(texts))
+    normalized_seeds = tuple(sorted({str(e).strip() for e in (seed_entities or []) if str(e).strip()}))
+    cache_key = hash((tuple(texts), model, batch_size, normalized_seeds))
     if cache_key in _entity_cache:
         return _entity_cache[cache_key]
-    
-    # Combine texts for extraction
-    combined_text = "\n\n".join(texts[:5])  # Limit to first 5 chunks to avoid token limits
-    
-    prompt = f"""Extract the top 5-10 most important entities (concepts, objects, people, organizations, technologies) from the following text.
+
+    try:
+        entities_set = set()
+        batches = _batch_texts(texts, batch_size=batch_size)
+
+        for batch in batches:
+            combined_text = "\n\n".join(batch)
+            matched_seed_entities = _filter_entities_for_batch(combined_text, list(normalized_seeds))
+            seed_hint = ""
+            if matched_seed_entities:
+                seed_hint = (
+                    "\nPrefer these existing graph entity names when they appear in the text. "
+                    "Keep exact casing/spelling where possible.\n"
+                    f"Existing graph entities in context: {json.dumps(matched_seed_entities)}\n"
+                )
+
+            prompt = f"""Extract up to 20 important entities (concepts, objects, people, organizations, technologies) from the following text.
+{seed_hint}
 Return ONLY a JSON array of entity names, no explanations.
 
 Example response format: ["Entity1", "Entity2", "Entity3"]
@@ -121,29 +169,27 @@ Text:
 {combined_text}
 
 Entities (as JSON array):"""
-    
-    try:
-        message = client.chat.completions.create(
-            model=model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        response_text = (message.choices[0].message.content or "").strip()
-        json_text = _extract_json_payload(response_text)
-        
-        # Parse JSON response
-        entities = json.loads(json_text)
-        if not isinstance(entities, list):
-            entities = [entities]
-        
-        # Deduplicate
-        entities = list(set(entities))
-        
-        logger.debug("Extracted %s entities", len(entities))
-        
+
+            message = client.chat.completions.create(
+                model=model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = (message.choices[0].message.content or "").strip()
+            json_text = _extract_json_payload(response_text)
+            batch_entities = json.loads(json_text)
+            if not isinstance(batch_entities, list):
+                batch_entities = [batch_entities]
+
+            for entity in batch_entities:
+                normalized = str(entity).strip()
+                if normalized:
+                    entities_set.add(normalized)
+
+        entities = sorted(entities_set)
+        logger.debug("Extracted %s entities across %s batches", len(entities), len(batches))
+
         # Cache result
         _entity_cache[cache_key] = entities
         return entities
@@ -180,27 +226,35 @@ def extract_relationships_with_evidence(
     texts: List[str],
     model: str = "meta-llama/llama-4-scout-17b-16e-instruct",
     entities: Optional[List[str]] = None,
+    batch_size: int = 3,
 ) -> List[Dict[str, Any]]:
     """Extract relationships with short evidence snippets and confidence."""
     if not texts:
         return []
 
-    cache_key = hash((tuple(texts), tuple(sorted(entities or []))))
+    cache_key = hash((tuple(texts), tuple(sorted(entities or [])), model, batch_size))
     if cache_key in _relationship_evidence_cache:
         return _relationship_evidence_cache[cache_key]
 
-    combined_text = "\n\n".join(texts[:5])
     relation_types_str = ", ".join(sorted(RELATIONSHIP_TYPES))
-    entity_constraint = ""
-    if entities:
-        canonical_entities = sorted({str(e).strip() for e in entities if str(e).strip()})
-        entity_constraint = (
-            "\nUse ONLY entities from this canonical list for source and target. "
-            "Do not invent new entity names.\n"
-            f"Canonical entities: {json.dumps(canonical_entities)}\n"
-        )
+    canonical_entities = sorted({str(e).strip() for e in entities or [] if str(e).strip()})
 
-    prompt = f"""Extract relations from the text.
+    try:
+        merged: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        batches = _batch_texts(texts, batch_size=batch_size)
+
+        for batch in batches:
+            combined_text = "\n\n".join(batch)
+            local_canonical = _filter_entities_for_batch(combined_text, canonical_entities)
+            entity_constraint = ""
+            if local_canonical:
+                entity_constraint = (
+                    "\nUse ONLY entities from this canonical list for source and target. "
+                    "Do not invent new entity names.\n"
+                    f"Canonical entities: {json.dumps(local_canonical)}\n"
+                )
+
+            prompt = f"""Extract relations from the text, as many as you can reasonably infer from the text.
 Use ONLY these relation types: {relation_types_str}.
 {entity_constraint}
 
@@ -220,50 +274,53 @@ Text:
 {combined_text}
 """
 
-    try:
-        message = client.chat.completions.create(
-            model=model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
+            message = client.chat.completions.create(
+                model=model,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}],
+            )
 
-        response_text = (message.choices[0].message.content or "").strip()
-        json_text = _extract_json_payload(response_text)
-        logger.debug("Relationship+evidence raw response (first 200 chars): %s", response_text[:200])
+            response_text = (message.choices[0].message.content or "").strip()
+            json_text = _extract_json_payload(response_text)
+            logger.debug("Relationship+evidence raw response (first 200 chars): %s", response_text[:200])
 
-        raw_records = json.loads(json_text)
-        if not isinstance(raw_records, list):
-            raw_records = [raw_records]
+            raw_records = json.loads(json_text)
+            if not isinstance(raw_records, list):
+                raw_records = [raw_records]
 
-        validated: List[Dict[str, Any]] = []
-        for rec in raw_records:
-            if not isinstance(rec, dict):
-                continue
+            for rec in raw_records:
+                if not isinstance(rec, dict):
+                    continue
 
-            source = str(rec.get("source", "")).strip()
-            target = str(rec.get("target", "")).strip()
-            rel_type = _normalize_relation_type(str(rec.get("relation", "")).strip())
-            evidence = str(rec.get("evidence", "")).strip()
-            confidence = rec.get("confidence", 0.0)
+                source = str(rec.get("source", "")).strip()
+                target = str(rec.get("target", "")).strip()
+                rel_type = _normalize_relation_type(str(rec.get("relation", "")).strip())
+                evidence = str(rec.get("evidence", "")).strip()
+                confidence = rec.get("confidence", 0.0)
 
-            try:
-                confidence = float(confidence)
-            except (TypeError, ValueError):
-                confidence = 0.0
-            confidence = max(0.0, min(1.0, confidence))
+                try:
+                    confidence = float(confidence)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                confidence = max(0.0, min(1.0, confidence))
 
-            if source and target and rel_type in RELATIONSHIP_TYPES:
-                validated.append(
-                    {
-                        "source": source,
-                        "relation": rel_type,
-                        "target": target,
-                        "evidence": evidence,
-                        "confidence": confidence,
-                    }
-                )
+                if not (source and target and rel_type in RELATIONSHIP_TYPES):
+                    continue
 
-        logger.debug("Extracted %s relation-evidence records", len(validated))
+                key = (source.casefold(), rel_type, target.casefold(), evidence.casefold())
+                existing = merged.get(key)
+                candidate = {
+                    "source": source,
+                    "relation": rel_type,
+                    "target": target,
+                    "evidence": evidence,
+                    "confidence": confidence,
+                }
+                if existing is None or candidate["confidence"] > existing["confidence"]:
+                    merged[key] = candidate
+
+        validated = list(merged.values())
+        logger.debug("Extracted %s relation-evidence records across %s batches", len(validated), len(batches))
 
         _relationship_evidence_cache[cache_key] = validated
         # Keep backward-compatible tuple cache too.

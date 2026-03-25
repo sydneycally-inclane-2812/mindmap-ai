@@ -1,9 +1,7 @@
 """Preprocessing pipeline: chunk, embed, extract entities and relationships."""
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import sys
 import os
-import importlib.util
 import logging
 import faiss
 import numpy as np
@@ -23,7 +21,7 @@ os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 # os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 class FAISSStore:
-    def __init__(self, dim, storage_dir="vectorstorage", name="faiss_index"):
+    def __init__(self, dim, storage_dir="databases", name="faiss_index"):
         self.dim = dim
         self.storage_dir = storage_dir
         self.index_path = os.path.join(storage_dir, f"{name}.index")
@@ -62,16 +60,75 @@ class FAISSStore:
         else:
             raise FileNotFoundError("No saved FAISS index or texts found.")
         
-def chunk_text(text, chunk_size=500, chunk_overlap=100):
-	splitter = RecursiveCharacterTextSplitter(
-		chunk_size=chunk_size,
-		chunk_overlap=chunk_overlap
-	)
-	return splitter.split_text(text)
+def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> List[str]:
+    """Split text into overlapping chunks, preferring paragraph/sentence boundaries."""
+    if not text:
+        return []
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+    if chunk_overlap < 0:
+        raise ValueError("chunk_overlap must be >= 0")
+
+    step = max(1, chunk_size - chunk_overlap)
+    chunks: List[str] = []
+    start = 0
+    text_len = len(text)
+    min_boundary = 0.6
+
+    def _boundary_index(start_idx: int, end_idx: int) -> int:
+        """Find a natural split boundary near the end of the candidate chunk."""
+        search_from = start_idx + int((end_idx - start_idx) * min_boundary)
+
+        # Prefer paragraph, then line, then sentence boundaries.
+        paragraph = text.rfind("\n\n", search_from, end_idx)
+        if paragraph != -1:
+            return paragraph
+
+        line_break = text.rfind("\n", search_from, end_idx)
+        if line_break != -1:
+            return line_break
+
+        for marker in (". ", "! ", "? "):
+            sentence = text.rfind(marker, search_from, end_idx)
+            if sentence != -1:
+                return sentence + 1
+
+        period = text.rfind(".", search_from, end_idx)
+        if period != -1:
+            return period + 1
+
+        whitespace = text.rfind(" ", search_from, end_idx)
+        if whitespace != -1:
+            return whitespace
+
+        return end_idx
+
+    while start < text_len:
+        end = min(start + chunk_size, text_len)
+
+        if end < text_len:
+            natural_end = _boundary_index(start, end)
+            if natural_end > start:
+                end = natural_end
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        if end >= text_len:
+            break
+        start += step
+
+    return chunks
 
 
-
-def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Dict[str, Any]:
+def preprocessing(
+    documents: List[str],
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+    seed_entities: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Preprocess documents: chunk, embed, extract entities and relationships.
     
@@ -119,22 +176,33 @@ def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: in
     
     # Step 3: Store embeddings in FAISS
     logger.info("Storing embeddings in FAISS...")
-    faiss_store = FAISSStore(dim=embeddings.shape[1], storage_dir="vector_storage", name="faiss_index")
+    faiss_store = FAISSStore(dim=embeddings.shape[1], storage_dir="databases", name="faiss_index")
     faiss_store.add(embeddings, all_chunks)
     
     # Step 4: Extract entities from all chunks
     logger.info("Extracting entities...")
-    entities_list = extract_entities(all_chunks)
+    normalized_seed_entities = sorted(
+        {
+            str(entity).strip()
+            for entity in (seed_entities or [])
+            if str(entity).strip()
+        }
+    )
+    entities_list = extract_entities(all_chunks, seed_entities=normalized_seed_entities)
     entities_set = set(entities_list)
     
     # Step 5: Extract relationships from all chunks
     logger.info("Extracting relationships...")
-    relation_records = extract_relationships_with_evidence(all_chunks, entities=list(entities_set))
+    relation_constraint_entities = sorted(set(entities_set).union(normalized_seed_entities))
+    relation_records = extract_relationships_with_evidence(
+        all_chunks,
+        entities=relation_constraint_entities,
+    )
     relationships = [(r["source"], r["relation"], r["target"]) for r in relation_records]
 
     # Step 6: Persist evidence and relation provenance in DuckDB
     logger.info("Persisting evidence in DuckDB...")
-    evidence_store = EvidenceDuckDBStore(db_path="data/evidence.duckdb")
+    evidence_store = EvidenceDuckDBStore(db_path="databases/evidence.duckdb")
     evidence_store.store_ingestion(
         documents=documents,
         chunks=chunk_records,

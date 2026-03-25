@@ -5,7 +5,7 @@ import os
 import pickle
 
 class FAISSStore:
-    def __init__(self, dim, storage_dir="vectorstorage", name="faiss_index"):
+    def __init__(self, dim, storage_dir="databases", name="faiss_index"):
         self.dim = dim
         self.storage_dir = storage_dir
         self.index_path = os.path.join(storage_dir, f"{name}.index")

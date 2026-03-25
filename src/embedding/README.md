@@ -1,711 +1,242 @@
-* **DuckDB** for text, metadata, evidence, entity registry, and mappings
-* **FAISS** for semantic retrieval
-* **Neo4j** for graph traversal and subgraph extraction
-* **LLM** for mention extraction, relation extraction, and final mind map summary
+# Embedding Pipeline README (Current Implementation)
 
-Core flow:
+This document reflects what is currently implemented in this folder.
 
-```text
-query -> FAISS semantic seeds -> map to graph nodes -> graph expansion -> subgraph pruning -> evidence hydration -> LLM answer / mind map
-```
+## Scope
 
----
+The current pipeline does the following:
 
-# 1. Core storage design
+- splits documents into text chunks using a custom splitter (no LangChain dependency)
+- creates embeddings with SentenceTransformers and stores vectors in FAISS
+- extracts entities and relationships with a Groq LLM in batches
+- stores relation evidence and ingestion artifacts in DuckDB
+- writes entity graph and relationships to Neo4j
+- exposes query helpers for graph traversal and evidence lookup
 
-## DuckDB responsibilities
+Primary modules:
 
-DuckDB stores:
-
-* documents
-* chunks
-* evidence units
-* chunk summaries
-* entity registry
-* aliases
-* extracted mentions
-* relation evidence
-* FAISS ID mappings
-
-## FAISS responsibilities
-
-FAISS indexes:
-
-* chunk text embeddings
-* chunk summary embeddings
-* entity description embeddings
-
-## Neo4j responsibilities
-
-Neo4j stores:
-
-* canonical graph nodes
-* semantic relationships
-* provenance links
-* graph traversal paths for mind map generation
+- src/embedding/preprocessing.py
+- src/embedding/llm.py
+- src/embedding/evidence_store.py
+- src/embedding/graph.py
+- src/embedding/pipeline.py
 
 ---
 
-# 2. Global entity registry format
+## Current Data Stores
 
-Use this simplified Python-side registry:
+### DuckDB
 
-```python
-entities = {
-    "gradient_descent": {
-        "aliases": ["gradient descent", "gd"]
-    },
-    "machine_learning": {
-        "aliases": ["machine learning", "ml"]
-    }
-}
-```
+Used for evidence and ingestion artifacts through EvidenceDuckDBStore.
 
-Interpretation:
+Active tables:
 
-* key = canonical entity name
-* value.aliases = alternate surface forms
+- documents
+- chunks
+- evidence_units
+- entity_registry
+- relations
+- relation_evidence
 
-For now:
+Current runtime path used by preprocessing and pipeline helpers:
 
-* no separate entity IDs
-* no entity types required yet
-* canonical names use `snake_case`
+- databases/evidence.duckdb
 
-This is acceptable for MVP.
+Note:
 
-## Canonical naming rule
+- EvidenceDuckDBStore has a default db_path of database/evidence.duckdb, but preprocessing passes databases/evidence.duckdb explicitly.
 
-All canonical entities should be stored in a normalized form:
+### FAISS
 
-* lowercase
-* snake_case
-* no punctuation unless necessary
+Used for chunk embedding persistence.
 
-Examples:
+Current behavior:
 
-* `gradient_descent`
-* `machine_learning`
-* `support_vector_machine`
+- embeddings are generated with all-MiniLM-L6-v2
+- index and text map are persisted under vector_storage
 
----
+### Neo4j
 
-# 3. Graph schema
+Used for entity graph storage and traversal.
 
-## Node types
+Current graph model in code:
 
-* `Document`
-* `Chunk`
-* `Topic`
-* `Concept`
-* `Definition`
-* `Formula`
-* `Example`
-* `Process`
-* `Property`
-* `Date`
-
-## Relationship types
-
-* `CONTAINS`
-* `PART_OF`
-* `DEFINES`
-* `HAS_PROPERTY`
-* `HAS_FORMULA`
-* `HAS_EXAMPLE`
-* `HAS_APPLICATION`
-* `PREREQUISITE_OF`
-* `DEPENDS_ON`
-* `USES`
-* `HAS_STEP`
-* `NEXT_STEP`
-* `SIMILAR_TO`
-* `CONTRASTS_WITH`
-* `MENTIONED_IN`
-* `SUPPORTED_BY`
-
-For MVP, not every node type must be used immediately. You can start mainly with:
-
-* `Document`
-* `Chunk`
-* `Topic`
-* `Concept`
-
-and add the rest incrementally.
+- node label: Entity
+- relationship type: RELATED_TO
+- relationship property type stores semantic relation label (for example relies_on)
 
 ---
 
-# 4. DuckDB tables
+## Ingestion Flow (As Implemented)
 
-## `documents`
+The ingest() function in pipeline.py runs these stages:
 
-* `document_id`
-* `title`
-* `source_path`
-* `doc_type`
-* `checksum`
+1. open Neo4j connection
+2. fetch existing Entity node names from Neo4j
+3. pass those names as seed entities into preprocessing
+4. preprocess documents (chunk, embed, extract, persist evidence)
+5. build graph in Neo4j
 
-## `chunks`
+Important current behavior:
 
-* `chunk_id`
-* `document_id`
-* `chunk_text`
-* `chunk_summary`
-* `section_title`
-* `chunk_order`
-* `token_count`
-
-## `evidence_units`
-
-Start with paragraph-level evidence.
-
-* `evidence_unit_id`
-* `chunk_id`
-* `unit_type`
-* `unit_text`
-* `unit_order`
-* `start_char`
-* `end_char`
-
-## `entity_registry`
-
-Stores canonical names.
-
-* `canonical_name`
-* `aliases_json`
-
-Example row:
-
-* `canonical_name = "gradient_descent"`
-* `aliases_json = ["gradient descent", "gd"]`
-
-## `entity_mentions`
-
-* `mention_id`
-* `evidence_unit_id`
-* `surface_form`
-* `canonical_name`
-* `decision`
-* `confidence`
-
-Where `decision` is one of:
-
-* `match_existing`
-* `create_new`
-* `uncertain`
-
-## `relations`
-
-* `relation_id`
-* `source_canonical_name`
-* `relation_type`
-* `target_canonical_name`
-* `confidence`
-* `is_derived`
-
-## `relation_evidence`
-
-* `relation_id`
-* `evidence_unit_id`
-* `support_score`
-
-## `faiss_id_map`
-
-* `faiss_id`
-* `index_name`
-* `item_type`
-* `item_id`
+- build_graph() currently clears Neo4j graph before writing new nodes and edges
+- existing Neo4j entity names are still used as extraction hints before clear
 
 ---
 
-# 5. Ingestion pipeline
+## Chunking (No LangChain)
 
-## Step 1: parse document into text
+Chunking is implemented in preprocessing.py using custom logic.
 
-Input sources:
+Features:
 
-* PDF
-* DOCX
-* PPTX
-* TXT
+- overlapping windows based on chunk_size and chunk_overlap
+- prefers natural boundaries in this order:
+  - paragraph breaks
+  - line breaks
+  - sentence boundaries
+  - whitespace fallback
 
-Output:
-
-* raw text blocks
-
-## Step 2: create retrieval chunks
-
-Chunk size:
-
-* about 250–500 tokens
-* section-aware if possible
-
-Do not make chunks sentence-sized.
-
-Each chunk should keep:
-
-* order
-* section title
-* document link
-
-## Step 3: split chunks into evidence units
-
-Inside each chunk, split into paragraph-level units.
-
-Example:
-
-* chunk `c12`
-
-  * `p1`
-  * `p2`
-  * `p3`
-
-Evidence units are for:
-
-* grounding
-* citations
-* relation support
+This replaced langchain_text_splitters.
 
 ---
 
-## Step 4: generate chunk summaries
+## LLM Extraction
 
-For each chunk, generate a short summary.
+Implemented in llm.py.
 
-Store in DuckDB and embed into FAISS.
+### Entity extraction
 
----
+- runs in batches over all chunks
+- can receive seed_entities from Neo4j
+- for each batch, only seed entities present in that batch text are injected as hints
+- merged and deduplicated across all batches
 
-## Step 5: mention extraction using the global registry
+### Relationship extraction with evidence
 
-For each chunk, call the LLM with:
-
-* chunk text
-* evidence labels like `p1`, `p2`, `p3`
-* full global entity registry
-
-Prompt behavior:
-
-* if a mention matches an existing canonical entity or alias, return that canonical name
-* otherwise create a new canonical name in snake_case
-* attach evidence unit references
-
-Expected output shape:
-
-```json
-{
-  "mentions": [
-    {
-      "surface_form": "GD",
-      "canonical_name": "gradient_descent",
-      "decision": "match_existing",
-      "evidence_units": ["p2"]
-    },
-    {
-      "surface_form": "differentiable objective function",
-      "canonical_name": "differentiable_objective_function",
-      "decision": "create_new",
-      "evidence_units": ["p3"]
-    }
-  ]
-}
-```
+- runs in batches over all chunks
+- constrained to fixed taxonomy:
+  - relies_on
+  - requires
+  - influences
+  - supports
+  - contrasts_with
+  - similar_to
+  - depends_on
+  - enables
+  - prevents
+  - related_to
+- optional canonical entity constraints are filtered per batch to keep prompts bounded
+- outputs include source, relation, target, evidence, confidence
+- deduplicates records and keeps the highest-confidence variant per normalized key
 
 ---
 
-## Step 6: normalize and resolve mentions
+## Neo4j Relationship Write Rule
 
-Even with the global registry prompt, do a code-side check.
+add_relationships() in graph.py enforces one directed edge per pair A -> B at write time.
 
-### Normalize function
+Cypher behavior:
 
-Use a deterministic normalizer:
+- if any outgoing edge from A to B already exists, no new edge is created
+- otherwise create one RELATED_TO edge with:
+  - type = extracted relation label
+  - count = 1
 
-```python
-def normalize_entity(text: str) -> str:
-    text = text.strip().lower()
-    text = text.replace("-", " ")
-    text = "_".join(text.split())
-    return text
-```
-
-Examples:
-
-* `"Gradient Descent"` -> `gradient_descent`
-* `"gradient descent"` -> `gradient_descent`
-* `"GD"` -> `gd`
-
-### Resolution logic
-
-For each extracted mention:
-
-1. normalize the returned canonical name
-2. check whether it exists as a canonical name in `entity_registry`
-3. if not, check whether it matches an alias of an existing canonical entity
-4. if yes, replace with the existing canonical entity
-5. if no, create a new canonical entity row
-6. if surface form is useful and not already present, add it as an alias
-
-Example:
-
-* mention: `"GD"`
-* model returns: `gradient_descent`
-* registry already contains `gradient_descent`
-* store mention as linked to `gradient_descent`
-
-Another example:
-
-* mention: `"Gradient descent"`
-* model returns: `gradient_descent`
-* alias `"gradient descent"` gets stored if missing
-
-This keeps the graph consistent.
+This keeps graph density controlled and avoids repeated edge growth for the same directed pair.
 
 ---
 
-## Step 7: relation extraction
+## Evidence Behavior
 
-For each chunk, call the LLM with:
+EvidenceDuckDBStore.store_ingestion() defaults to reset_existing=True.
 
-* original chunk text
-* evidence unit labels
-* resolved canonical entity names found in that chunk
+On each ingestion run, it clears ingestion-scoped tables before inserting fresh rows:
 
-Ask it to extract only directly supported relations.
+- relation_evidence
+- evidence_units
+- relations
+- chunks
+- documents
 
-Example output:
-
-```json
-{
-  "relations": [
-    {
-      "source": "gradient_descent",
-      "relation": "HAS_FORMULA",
-      "target": "gradient_descent_update_rule",
-      "evidence_units": ["p2"],
-      "confidence": 0.95
-    },
-    {
-      "source": "gradient_descent",
-      "relation": "DEPENDS_ON",
-      "target": "differentiable_objective_function",
-      "evidence_units": ["p3"],
-      "confidence": 0.87
-    }
-  ]
-}
-```
-
-Important:
-
-* relation extraction must use the original chunk text
-* not only the chunk summary
+This prevents evidence duplication across repeated runs for the same local test workflow.
 
 ---
 
-## Step 8: write to DuckDB
+## Public API (from src.embedding)
 
-Store:
+Exported functions/classes:
 
-* chunk text
-* chunk summary
-* evidence units
-* entity mentions
-* canonical entity registry
-* aliases
-* relations
-* relation evidence
-* FAISS index mapping
-
----
-
-## Step 9: write to Neo4j
-
-Create:
-
-* document nodes
-* chunk nodes
-* concept/topic/etc nodes
-* semantic edges
-* provenance edges
-
-Typical writes:
-
-* `Document -[:CONTAINS]-> Chunk`
-* `Chunk -[:MENTIONED_IN]-> Concept` or equivalently `Concept -[:MENTIONED_IN]-> Chunk`
-* `Concept -[:HAS_FORMULA]-> Formula`
-* `Concept -[:DEPENDS_ON]-> Concept`
-* `Concept -[:SUPPORTED_BY]-> Chunk` if you want direct evidence linkage there too
-
-For MVP, keep provenance simple and rely on DuckDB for detailed evidence text.
+- ingest
+- query
+- query_batch
+- get_shortest_path
+- get_graph_summary
+- get_entity_neighbors
+- get_evidence_for_entity
+- show_evidence_for_entity
+- Neo4jGraphStore
 
 ---
 
-## Step 10: embed into FAISS
+## Query Helpers
 
-Create embeddings for:
+### query(entity, graph_store)
 
-* chunk text
-* chunk summary
-* canonical entity descriptions
+Returns incoming and outgoing relationships plus total connections.
 
-At first, if you do not yet have full descriptions, entity description can just be:
+### query_batch(entities, graph_store)
 
-* canonical name
-* aliases joined into a short string
+Runs query() for multiple entities.
 
-Example:
+### get_shortest_path(source, target, graph_store)
 
-```text
-gradient_descent | aliases: gradient descent, gd
-```
+Returns shortest path and hop length when a path exists.
 
-Store FAISS ID mappings in DuckDB.
+### get_graph_summary(graph_store)
 
----
+Returns node/edge counts, relation type histogram, average degree, and top entities.
 
-# 6. Search pipeline
+### get_entity_neighbors(entity, graph_store, depth)
 
-## Step 1: embed user query
+Returns neighbors and per-path details up to depth.
 
-Convert the user query into an embedding.
+Note:
 
-## Step 2: broad FAISS retrieval
+- this query can become expensive on dense/cyclic graphs due to variable-length path expansion.
 
-Search:
+### get_evidence_for_entity(entity, limit)
 
-* chunk index
-* chunk summary index
-* entity description index
-
-Return top-k from each.
-
-For MVP, broad retrieval is fine.
+Reads DuckDB relation evidence rows for an entity and returns structured results.
 
 ---
 
-## Step 3: map FAISS hits to graph seeds
+## Environment Requirements
 
-Convert hits into graph anchors.
+Required in .env:
 
-Examples:
-
-* chunk hit -> chunk node + entities mentioned in that chunk
-* entity description hit -> concept/topic node
-* chunk summary hit -> original chunk + linked entities
-
-Then rerank with:
-
-* FAISS similarity
-* exact text overlap with query
-* canonical name / alias overlap
+- GROQ_API_KEY
+- NEO4J_URI
+- NEO4J_USERNAME
+- NEO4J_PASSWORD
 
 ---
 
-## Step 4: graph expansion
+## Current Limitations
 
-Take top seeds and expand through Neo4j.
-
-Use hard limits:
-
-* max depth = 1 or 2
-* max neighbors per node
-* confidence threshold
-
-Do not let expansion grow unchecked.
+- build_graph() clears Neo4j each run, so graph is not incremental yet
+- get_entity_neighbors() can be slow at higher depth on dense graphs
+- FAISS operations show static type-check warnings in editor stubs, but runtime logic is intact
+- relation model is intentionally simple (single RELATED_TO edge with a type property)
 
 ---
 
-## Step 5: subgraph pruning
+## Recommended Next Improvements
 
-Prune by:
-
-* relation confidence
-* number of supporting evidence units
-* graph distance from original seed
-* query relevance
-
-This is necessary so the mind map stays readable.
-
----
-
-## Step 6: evidence hydration
-
-For important nodes and edges in the subgraph:
-
-* fetch supporting evidence units from DuckDB
-* attach the paragraph text
-
-This gives you:
-
-* graph structure from Neo4j
-* actual source text from DuckDB
-
-That combination is what makes the output grounded.
-
----
-
-## Step 7: build mind-map-ready structure
-
-Before sending to the final LLM, compress the subgraph into something cleaner.
-
-Example structure:
-
-* center concept/topic
-* first-level branches grouped by relation type or subtopic
-* second-level nodes as related concepts
-* evidence snippets attached
-
-This is better than sending the raw graph.
-
----
-
-## Step 8: final LLM generation
-
-Send:
-
-* compact subgraph
-* evidence snippets
-* user query
-
-Generate:
-
-* answer
-* summary
-* mind map text/JSON
-
----
-
-# 7. Prompt rules
-
-## Mention extraction prompt
-
-Input:
-
-* chunk text
-* evidence unit labels
-* global entity registry in the simplified dict form
-
-Instruction:
-
-* return canonical entity names exactly as they exist in the registry if matched
-* if new, create a new canonical name in snake_case
-* attach evidence unit labels
-* do not invent alternate spellings for existing canonical names
-
-## Relation extraction prompt
-
-Input:
-
-* chunk text
-* evidence labels
-* resolved canonical names in this chunk
-
-Instruction:
-
-* extract only relations directly supported by the text
-* use the provided canonical names exactly
-* attach evidence unit labels
-* do not invent unsupported relations
-
----
-
-# 8. Minimal entity registry policy
-
-Your Python-side registry stays simple:
-
-```python
-entities = {
-    "gradient_descent": {
-        "aliases": ["gradient descent", "gd"]
-    },
-    "machine_learning": {
-        "aliases": ["machine learning", "ml"]
-    }
-}
-```
-
-## Update rule during ingestion
-
-When a new entity is created:
-
-* add a new canonical key
-* initialize aliases with the observed surface form if useful
-
-Example:
-
-```python
-entities["differentiable_objective_function"] = {
-    "aliases": ["differentiable objective function"]
-}
-```
-
-When an existing entity is matched:
-
-* add new alias if it is not already present
-
----
-
-# 9. MVP constraints
-
-To keep it buildable, start with:
-
-* paragraph-level evidence only
-* chunk size 250–500 tokens
-* simple normalization
-* shallow graph depth
-* global registry attached to prompts
-* broad FAISS retrieval
-* limited node types actually used at first
-
-Start with mostly:
-
-* `Concept`
-* `Topic`
-* `Document`
-* `Chunk`
-
-Then add:
-
-* `Definition`
-* `Formula`
-* `Example`
-* `Process`
-
-once the pipeline is stable.
-
----
-
-# 10. Final end-to-end plan
-
-## Ingestion
-
-```text
-document
--> parse text
--> split into chunks
--> split chunks into paragraph evidence units
--> generate chunk summaries
--> mention extraction using global registry
--> normalize and resolve mentions
--> update entity registry and aliases
--> relation extraction using resolved canonical names
--> store all metadata/text/evidence in DuckDB
--> write graph structure to Neo4j
--> create embeddings and index in FAISS
-```
-
-## Search
-
-```text
-user query
--> embed query
--> FAISS retrieval over chunks, summaries, entity descriptions
--> map hits to graph seeds
--> rerank
--> expand graph in Neo4j
--> prune subgraph
--> hydrate with evidence from DuckDB
--> build compact mind map structure
--> LLM generates final answer / mind map
-```
+1. Make Neo4j build mode configurable:
+   - replace or append
+2. Add bounded neighbor traversal options:
+   - max_neighbors
+   - max_paths_per_neighbor
+3. Add ingestion checkpoints for very large corpora
+4. Add entity normalization policy (for example snake_case canonicalization) before graph writes

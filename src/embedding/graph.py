@@ -1,6 +1,6 @@
 """Graph building with Neo4j: construct knowledge graph with typed relationships."""
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 import os
 import logging
 from neo4j import GraphDatabase
@@ -14,9 +14,9 @@ homedir = Path(__file__).parent.parent.parent.resolve()
 load_dotenv(homedir / '.env')
 
 # Neo4j Aura connection configuration (read from .env)
-NEO4J_URI = os.getenv("NEO4J_URI")
-NEO4J_USER = os.getenv("NEO4J_USERNAME")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_URI = os.getenv("NEO4J_URI", "")
+NEO4J_USER = os.getenv("NEO4J_USERNAME", "")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 
 if not all([NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD]):
     raise ValueError(
@@ -86,31 +86,69 @@ class Neo4jGraphStore:
             relationships: List of (entity1, relation_type, entity2) tuples
         """
         with self.driver.session() as session:
+            inserted = 0
+            skipped_existing = 0
+
             for entity1, relation_type, entity2 in relationships:
-                # Upsert endpoint nodes so relationship extraction phrases are not dropped.
+                source = str(entity1).strip()
+                target = str(entity2).strip()
+                rel_type = str(relation_type).strip() or "related_to"
+
+                # Keep at most one directed edge for A -> B.
+                # If any relationship already exists for this pair, do not create a new one.
                 cypher = """
                 MERGE (e1:Entity {name: $entity1})
                 MERGE (e2:Entity {name: $entity2})
-                MERGE (e1)-[r:RELATED_TO {type: $relation_type}]->(e2)
-                ON CREATE SET r.count = 1
-                ON MATCH SET r.count = r.count + 1
-                """
-                session.run(
-                    cypher,
-                    entity1=str(entity1).strip(),
-                    entity2=str(entity2).strip(),
-                    relation_type=str(relation_type).strip(),
+                WITH e1, e2, $relation_type AS relation_type,
+                     EXISTS { MATCH (e1)-[]->(e2) } AS has_edge
+                FOREACH (_ IN CASE WHEN has_edge THEN [] ELSE [1] END |
+                    CREATE (e1)-[:RELATED_TO {type: relation_type, count: 1}]->(e2)
                 )
-            logger.info("Added %s relationships to graph", len(relationships))
+                RETURN NOT has_edge AS created
+                """
+                row = session.run(
+                    cypher,
+                    entity1=source,
+                    entity2=target,
+                    relation_type=rel_type,
+                ).single()
+                created = bool(row["created"]) if row else False
+                if created:
+                    inserted += 1
+                else:
+                    skipped_existing += 1
+
+            logger.info(
+                "Processed %s relationships: %s inserted, %s skipped existing A->B pairs",
+                len(relationships),
+                inserted,
+                skipped_existing,
+            )
+
+    def list_entities(self, limit: Optional[int] = None) -> List[str]:
+        """Return existing entity names from Neo4j for bootstrapping extraction."""
+        with self.driver.session() as session:
+            if limit is None:
+                rows = session.run(
+                    "MATCH (e:Entity) RETURN e.name as name ORDER BY name"
+                ).data()
+            else:
+                rows = session.run(
+                    "MATCH (e:Entity) RETURN e.name as name ORDER BY name LIMIT $limit",
+                    limit=int(limit),
+                ).data()
+        return [row["name"] for row in rows if row.get("name")]
     
     def get_graph_stats(self) -> Dict[str, Any]:
         """Get statistics about the graph."""
         with self.driver.session() as session:
             # Count nodes
-            num_nodes = session.run("MATCH (n:Entity) RETURN count(n) as count").single()["count"]
+            num_nodes_row = session.run("MATCH (n:Entity) RETURN count(n) as count").single()
+            num_nodes = num_nodes_row["count"] if num_nodes_row else 0
             
             # Count relationships
-            num_edges = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()["count"]
+            num_edges_row = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
+            num_edges = num_edges_row["count"] if num_edges_row else 0
 
             # Avoid property-key warnings when there are no relationships yet.
             if num_edges == 0:
@@ -138,7 +176,7 @@ class Neo4jGraphStore:
             }
 
 
-def build_graph(processed_data: Dict[str, Any], graph_store: Neo4jGraphStore = None) -> Neo4jGraphStore:
+def build_graph(processed_data: Dict[str, Any], graph_store: Optional[Neo4jGraphStore] = None) -> Neo4jGraphStore:
     """
     Build knowledge graph in Neo4j from preprocessed data.
     

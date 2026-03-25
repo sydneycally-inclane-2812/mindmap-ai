@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class EvidenceDuckDBStore:
     """Persist ingestion artifacts and relation evidence to DuckDB."""
 
-    def __init__(self, db_path: str = "data/evidence.duckdb"):
+    def __init__(self, db_path: str = "database/evidence.duckdb"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = duckdb.connect(db_path)
@@ -100,6 +100,14 @@ class EvidenceDuckDBStore:
     def close(self) -> None:
         self.conn.close()
 
+    def clear_ingestion_tables(self) -> None:
+        """Reset ingestion-scoped tables so each run reflects current documents."""
+        self.conn.execute("DELETE FROM relation_evidence")
+        self.conn.execute("DELETE FROM evidence_units")
+        self.conn.execute("DELETE FROM relations")
+        self.conn.execute("DELETE FROM chunks")
+        self.conn.execute("DELETE FROM documents")
+
     @staticmethod
     def _find_chunk_id_for_evidence(chunks: List[Dict[str, Any]], evidence_text: str) -> Optional[str]:
         """Best-effort mapping from evidence snippet to a chunk ID."""
@@ -132,8 +140,12 @@ class EvidenceDuckDBStore:
         chunks: List[Dict[str, Any]],
         entities: List[str],
         relation_records: List[Dict[str, Any]],
+        reset_existing: bool = True,
     ) -> None:
         """Persist documents, chunks, entities, and relation evidence."""
+        if reset_existing:
+            self.clear_ingestion_tables()
+
         for doc_idx, _doc_text in enumerate(documents):
             document_id = f"doc_{doc_idx}"
             self.conn.execute(

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from src.embedding import ingest, query, get_graph_summary, query_batch, get_entity_neighbors
+from src.embedding import ingest, query, get_graph_summary, query_batch, get_entity_neighbors, get_evidence_for_entity
 
 
 def configure_logging(mode: str = "dev"):
@@ -45,7 +45,6 @@ def format_relation_chain(path_nodes, relation_types):
 			parts.append(path_nodes[idx + 1])
 	return " ".join(parts)
 
-
 def main():
 	"""
 	Example: Ingest documents and query the knowledge graph in Neo4j.
@@ -54,22 +53,23 @@ def main():
 	# Sample documents (in real usage, read from files)
 	documents = [
 		"""
-		Marketing relies heavily on social media platforms. Social media 
-		enables direct customer engagement and brand awareness. Digital marketing 
-		requires data analysis and audience segmentation. Marketing campaigns 
-		support sales goals and revenue generation.
+		Marketing is the act of acquiring, satisfying and retaining customers.[3]It is one of the primary components of business management and commerce.[4]
+
+		Marketing is usually conducted by the seller, typically a retailer or manufacturer. Products can be marketed to other businesses (B2B) or directly to consumers (B2C).[5] Sometimes tasks are contracted to dedicated marketing firms, like a media, market research, or advertising agency. Sometimes, a trade association or government agency (such as the Agricultural Marketing Service) advertises on behalf of an entire industry or locality, often a specific type of food (e.g. Got Milk?), food from a specific area, or a city or region as a tourism destination.
+
+		Market orientations are philosophies concerning the factors that should go into market planning.[6] The marketing mix, which outlines the specifics of the product and how it will be sold, including the channels that will be used to advertise the product,[7][8] is affected by the environment surrounding the product,[9] the results of marketing research and market research,[10] and the characteristics of the product's target market.[11] Once these factors are determined, marketers must then decide what methods of promoting the product,[5] including use of coupons and other price inducements.[12] 
 		""",
 		"""
-		Machine Learning requires large amounts of quality data. Deep Learning 
-		is a subset of Machine Learning that uses neural networks. Neural Networks 
-		are inspired by biological neurons. Data preprocessing is essential for 
-		ML model training. Feature engineering influences model performance.
+		Distribution is the process of making a product or service available for the consumer or business user who needs it, and a distributor is a business involved in the distribution stage of the value chain. Distribution can be done directly by the producer or service provider or by using indirect channels with distributors or intermediaries. Distribution (or place) is one of the four elements of the marketing mix: the other three elements being product, pricing, and promotion.
+
+		Decisions about distribution need to be taken in line with a company's overall strategic vision and mission. Developing a coherent distribution plan is a central component of strategic planning. At the strategic level, as well as deciding whether to distribute directly or via a distribution network, there are three broad approaches to distribution, namely mass, selective and exclusive distribution. The number and type of intermediaries selected largely depends on the strategic approach. The overall distribution channel should add value to the consumer. 
 		""",
 	]
 	
 	# Ingest documents and build graph in Neo4j
 	try:
-		graph_store = ingest(documents, chunk_size=500, chunk_overlap=100)
+		# Smaller chunks with overlap typically increase relation recall.
+		graph_store = ingest(documents, chunk_size=350, chunk_overlap=120)
 		
 		# Print graph summary
 		logger.debug("Graph Summary:")
@@ -118,6 +118,22 @@ def main():
 		batch_results = query_batch(["Marketing", "Data", "Social Media"], graph_store)
 		for entity, result in batch_results.items():
 			logger.debug("  %s: %s connections", entity, result["total_connections"])
+
+		# Evidence example: read supporting snippets stored during preprocessing.
+		logger.debug("Query 4: Evidence snippets for 'Marketing'")
+		evidence_rows = get_evidence_for_entity("Marketing", limit=5)
+		if not evidence_rows:
+			logger.debug("  No evidence found for 'Marketing'")
+		else:
+			for row in evidence_rows:
+				logger.debug(
+					"  %s --[%s]--> %s (score=%.2f)",
+					row["source"],
+					row["relation"],
+					row["target"],
+					row["score"],
+				)
+				logger.debug("    evidence: %s", row["evidence"] or "(empty)")
 		
 		# Keep connection open
 		logger.debug("Graph store ready for queries. Call graph_store.close() to disconnect.")
