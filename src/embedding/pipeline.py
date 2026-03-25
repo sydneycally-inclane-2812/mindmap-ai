@@ -219,14 +219,17 @@ def get_entity_neighbors(entity: str, graph_store: Neo4jGraphStore, depth: int =
     """
     
     with graph_store.driver.session() as session:
-        # Use variable-length path and extract last relationship type
+        # Use a static query string (for neo4j driver typing) and parameterized depth filter.
         result = session.run(
-            f"""MATCH (e:Entity {{name: $name}})-[rels*1..{depth}]-(neighbor:Entity)
-            WITH DISTINCT neighbor, 
-                 coalesce(rels[-1].type, 'unknown') as relation_type
+            """
+            MATCH path = (e:Entity {name: $name})-[rels*1..]-(neighbor:Entity)
+            WHERE length(path) <= $depth
+            WITH DISTINCT neighbor, coalesce(rels[-1].type, 'unknown') as relation_type
             RETURN neighbor.name as neighbor, relation_type
-            ORDER BY neighbor""",
-            name=entity
+            ORDER BY neighbor
+            """,
+            name=entity,
+            depth=depth,
         ).data()
         
         neighbors = [(row["neighbor"], row["relation_type"]) for row in result]

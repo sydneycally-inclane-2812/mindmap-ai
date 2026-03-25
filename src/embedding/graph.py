@@ -42,14 +42,10 @@ class Neo4jGraphStore:
         # Test connection
         try:
             with self.driver.session() as session:
-                result = session.run("RETURN 1")
+                session.run("RETURN 1")
                 print("Neo4j connection successful")
         except Exception as e:
             print(f"Neo4j connection failed: {e}")
-            print("\nTroubleshooting:")
-            print("1. Verify NEO4J_URI is correct (format: neo4j+s://xxxxx.databases.neo4j.io)")
-            print("2. Check NEO4J_USER and NEO4J_PASSWORD in .env")
-            print("3. Ensure your Neo4j Aura instance is running at https://console.neo4j.io")
             raise
     
     def close(self):

@@ -1,13 +1,18 @@
 """Preprocessing pipeline: chunk, embed, extract entities and relationships."""
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from typing import List, Dict, Any
 import sys
 import os
 import importlib.util
+import faiss
+import numpy as np
+
+import os
+import pickle
 
 # Reduce transformer loading noise in CLI output.
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Import from components-tbd (which has hyphens, so we need to use importlib)
 def _import_module(module_path, module_name):
@@ -22,20 +27,59 @@ documents_ingestion = _import_module(
     os.path.join(base_path, 'components-tbd', 'documents_ingestion.py'),
     'documents_ingestion'
 )
-vectorstore = _import_module(
-    os.path.join(base_path, 'components-tbd', 'vectorstore.py'),
-    'vectorstore'
-)
 
-chunk_text = documents_ingestion.chunk_text
-FAISSStore = vectorstore.FAISSStore
+class FAISSStore:
+    def __init__(self, dim, storage_dir="vectorstorage", name="faiss_index"):
+        self.dim = dim
+        self.storage_dir = storage_dir
+        self.index_path = os.path.join(storage_dir, f"{name}.index")
+        self.texts_path = os.path.join(storage_dir, f"{name}_texts.pkl")
+
+        if os.path.exists(self.index_path) and os.path.exists(self.texts_path):
+            self.index = faiss.read_index(self.index_path)
+            with open(self.texts_path, "rb") as f:
+                self.texts = pickle.load(f)
+        else:
+            self.index = faiss.IndexFlatL2(dim)
+            self.texts = []
+
+    def add(self, embeddings, texts):
+        self.index.add(np.array(embeddings).astype("float32"))
+        self.texts.extend(texts)
+        self.save()
+
+    def search(self, query_embedding, k=5):
+        D, I = self.index.search(
+            np.array([query_embedding]).astype("float32"), k
+        )
+        return [self.texts[i] for i in I[0] if i < len(self.texts)]
+
+    def save(self):
+        os.makedirs(self.storage_dir, exist_ok=True)
+        faiss.write_index(self.index, self.index_path)
+        with open(self.texts_path, "wb") as f:
+            pickle.dump(self.texts, f)
+
+    def load(self):
+        if os.path.exists(self.index_path) and os.path.exists(self.texts_path):
+            self.index = faiss.read_index(self.index_path)
+            with open(self.texts_path, "rb") as f:
+                self.texts = pickle.load(f)
+        else:
+            raise FileNotFoundError("No saved FAISS index or texts found.")
+        
+def chunk_text(text, chunk_size=500, chunk_overlap=100):
+	splitter = RecursiveCharacterTextSplitter(
+		chunk_size=chunk_size,
+		chunk_overlap=chunk_overlap
+	)
+	return splitter.split_text(text)
 
 from sentence_transformers import SentenceTransformer
 from transformers import logging as hf_logging
 from .llm import extract_entities, extract_relationships
 
 hf_logging.set_verbosity_error()
-
 
 def preprocessing(documents: List[str], chunk_size: int = 500, chunk_overlap: int = 100) -> Dict[str, Any]:
     """
