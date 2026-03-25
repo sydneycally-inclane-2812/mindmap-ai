@@ -1,6 +1,11 @@
 import streamlit as st
 import networkx as nx
 from sentence_transformers import SentenceTransformer
+from pypdf import PdfReader
+from pptx import Presentation
+from docx import Document
+import io
+import fitz # PyMuPDF
 
 from components.documents_ingestion import chunk_text
 from components.vectorstore import FAISSStore
@@ -32,8 +37,44 @@ def build_graph(nodes, edges):
     for e in edges:
         G.add_edge(e["source"], e["target"], label=e["relation"])
     return G
+from pypdf import PdfReader
+from pptx import Presentation
+import io
 
-uploaded_files = st.file_uploader("Upload text files", type=["txt"], accept_multiple_files=True)
+
+def extract_text_from_pdf(uploaded_file):
+    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+    return "\n".join(page.get_text() for page in doc)
+
+
+def extract_text_from_file(uploaded_file):
+    """Extract plain text from .txt, .pdf, or .pptx files."""
+    name = uploaded_file.name.lower()
+    
+    if name.endswith(".txt"):
+        return uploaded_file.read().decode("utf-8")
+    
+    elif name.endswith(".pdf"):
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        return "\n".join(page.get_text() for page in doc)
+    
+    elif name.endswith(".pptx"):
+        prs = Presentation(io.BytesIO(uploaded_file.read()))
+        texts = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    texts.append(shape.text_frame.text)
+        return "\n".join(texts)
+    
+    elif name.endswith(".docx"):
+        doc = Document(io.BytesIO(uploaded_file.read()))
+        return "\n".join(para.text for para in doc.paragraphs if para.text)
+    
+    return ""  # unsupported type
+
+# After
+uploaded_files = st.file_uploader("Upload files", type=["txt", "pdf", "pptx", "docx"], accept_multiple_files=True)
 
 import os
 
@@ -42,11 +83,14 @@ os.makedirs(data_dir, exist_ok=True)
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
-        file_path = os.path.join(data_dir, uploaded_file.name)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        text = extract_text_from_file(uploaded_file)
+        # Save as .txt regardless of original format
+        base_name = os.path.splitext(uploaded_file.name)[0]
+        file_path = os.path.join(data_dir, base_name + ".txt")
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(text)
 
-    st.success(f"Uploaded {len(uploaded_files)} files.")
+    st.success(f"Uploaded and processed {len(uploaded_files)} files.")
 
 # Ingest all documents in data_dir and build a single vector store
 def ingest_all_documents():

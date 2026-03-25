@@ -1,0 +1,187 @@
+ 
+ 
+ 
+ 
+ 
+SP Jain School of Global Management 
+ 
+ 
+ 
+MindMapAI: A RAG System for Generating Mind Maps from Course 
+Materials 
+ 
+Generative AI and Applications in Data Science 
+ 
+ 
+Group Project Proposal 
+ 
+Devanshi Rhea Aucharaz – bj24dsy005 
+Jason Adika Tanuwijaya – bs23dsy031 
+Patrick Faraon – bs23dsy024 
+Dat Tran – bj24dsyu08 
+ 
+ 
+16 March 2026 
+
+Table of Contents 
+Project Overview ............................................................................................................3 
+Project Objectives ..........................................................................................................3 
+Project Scope .................................................................................................................3 
+System Architecture .......................................................................................................4 
+Technologies and Tools ...................................................................................................4 
+Project Deliverables ........................................................................................................4 
+Project Timeline..............................................................................................................5 
+Week 1: System design and data prep ...........................................................................5 
+Week 2: RAG pipeline development ...............................................................................5 
+Week 3: Mind map generation and evaluation ................................................................5 
+ 
+
+Project Overview 
+Students often struggle to transform stacks of lecture notes, slides and readings into a coherent 
+and organised structure. Traditional study tools summarize information, but they do not show 
+how concepts are connected to each other. This level of understanding comes from seeing the 
+big picture and the connections between concepts. 
+Our group project proposes MindMapAI, a learning assistant that uses Retrieval-Augmented 
+Generation (RAG) technology. This assistant automatically generates mind maps from uploaded 
+course materials. Students can upload documents such as lecture slides, PDFs and notes. 
+With a RAG implementation, the assistant extracts relevant information from the uploaded 
+documents and generates organised mind maps that organise important topics, subtopics and 
+their connections. 
+The aim is to enhance students’ knowledge organisation, concept understanding and exam 
+preparation by transforming static knowledge into an interactive conceptual map. 
+ 
+Project Objectives 
+1. To develop a system that uses a Retrieval-Augmented Generation (RAG) model to 
+retrieve information from the content of the courses. 
+2. To automatically identify and retrieve the fundamental concepts and their relationships 
+with one another. 
+3. To have clear hierarchical representation of knowledge in the mind maps. 
+4. To create a user interface that allows students to upload their materials and generate 
+mind maps. 
+5. To use prompt engineering and retrieval techniques to efficiently generate accurate 
+outputs. 
+ 
+Project Scope 
+The project aims to develop a system that can process course content and transform it into 
+conceptual mind maps. 
+ 
+In Scope 
+• 
+Text Extraction and Cleaning 
+• 
+Setting up a Vector Database for Document Retrieval 
+• 
+Creating a Retrieval-Augmented Generation (RAG) Pipeline 
+• 
+Creating Structured Outputs in Mind Map Format 
+• 
+Visualization of the Mind Map 
+ 
+Out of Scope 
+• 
+Large-scale Deployment 
+• 
+Real-time Collaborative Editing 
+
+• 
+University LMS Platform 
+• 
+Large-scale Data Sets 
+ 
+System Architecture 
+The system will be constructed using the following components: 
+1. Input Layer 
+- 
+Users upload course materials 
+2. Preprocessing Layer 
+- 
+Text extraction 
+- 
+Chunking 
+- 
+Cleaning 
+3. Retrieval Layer 
+- 
+Embedding generation 
+- 
+Vector storage 
+- 
+Semantic Search 
+4. Generation Layer 
+- 
+Prompt engineering 
+- 
+LLM concept extraction 
+- 
+Hierarchical structure creation 
+5. Visualisation Layer 
+- 
+Mind map generation 
+- 
+Interactive concept tree 
+ 
+Technologies and Tools 
+Component 
+Technology 
+Programming Language 
+Python 
+LLM 
+LLaMa 3, Mistral, or Phi-3 
+Embedding Model 
+Sentence Transformers (e.g. all-MiniLM-L6-v2) 
+Vector Database 
+FAISS / ChromaDB 
+RAG Framework 
+LangChain / LlamaIndex 
+Document Parsing 
+PyPDF  
+Mind Map Generation 
+Graphviz 
+User Interface 
+Streamlit 
+ 
+Project Deliverables 
+The following are the expected deliverables of the project: 
+• 
+A prototype system developed using the RAG-based approach 
+• 
+A system capable of producing mind maps from course materials 
+• 
+Sample mind maps produced from uploaded documents 
+• 
+Well-structured code file(s) 
+
+Project Timeline 
+Week 1: System design and data prep 
+• 
+Determine the system architecture 
+• 
+Develop the document parsing feature 
+• 
+Construct the text preprocessing pipeline 
+• 
+Compute the embeddings 
+• 
+Establish the vector database 
+ 
+Week 2: RAG pipeline development 
+• 
+Develop the semantic retrieval feature 
+• 
+Design the prompts for concept extraction 
+• 
+Integrate the LLM-powered generation 
+• 
+Generate the structured, hierarchical output 
+ 
+Week 3: Mind map generation and evaluation 
+• 
+Integrate the visualization component 
+• 
+Generate the mind maps from the test documents 
+• 
+Evaluate the outcome 
+• 
+Prepare the documentation and final report 
+ 
+ 

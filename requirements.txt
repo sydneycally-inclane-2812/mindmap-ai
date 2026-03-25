@@ -6,5 +6,7 @@ faiss-cpu
 langchain
 langchain-community
 langchain-text-splitters
-pypdf
+pymupdf
 numpy
+python-pptx
+python-docx
