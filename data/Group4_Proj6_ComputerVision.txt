@@ -1,0 +1,240 @@
+Vision-Language Model for Automated Radiology
+Report Generation
+Devanshi Rhea Aucharaz
+Bachelor of Data Science
+SP Jain School of Global Management
+devanshirhea.bj24dsy005@spjain.org
+Naima Dzhunushova
+Bachelor of Data Science
+SP Jain School of Global Management
+naima.bs23dsy045@spjain.org
+Makhabat Zhyrgalbekova
+Bachelor of Data Science
+SP Jain School of Global Management
+makhabat.bs23dsy034@spjain.org
+Trisha Mukherjee
+Bachelor of Data Science
+SP Jain School of Global Management
+trisha.bs23dmu052@spjain.edu.au
+Abstract—The development of automated radiology report
+generation systems is essential to solve the increasing cognitive
+workload of clinical professionals. This study presents a multi-
+modal pipeline employing the Indiana University (IU) Chest X-
+Ray dataset to generate structured ”Findings” from radiographic
+scans. We conducted an exploratory data analysis to define the
+connection between monochromatic visual features and clinical
+narratives, followed by the implementation of a baseline system
+using a pre-trained CNN backbone. Our Stage 1 Proof of Concept
+validates the functional integrity of the data pipeline, achieving
+successful feature embedding extraction and stable baseline
+loss curves. This work establishes a reproducible roadmap for
+integrating advanced Vision-Language Models (VLM) to enhance
+diagnostic throughput and reliability in medical reporting.
+Index Terms—Vision-language models, medical imaging, chest
+x-ray analysis, radiology report generation, computer vision,
+multi-modal alignment.
+I. INTRODUCTION
+Medical imaging plays a central role in clinical diagnosis,
+with chest radiography being one of the most commonly
+performed procedures worldwide [1]. However, the increasing
+volume of imaging data places significant workload on radiol-
+ogists, leading to reporting delays and potential inconsistencies
+[3], [4].
+This project addresses the task of automated radiology
+report generation, where a model translates visual features
+from chest X-ray images into structured clinical findings.
+In this Stage 1 study, a baseline pipeline is developed using
+the Indiana University (IU) Chest X-Ray dataset [10], focusing
+on exploratory data analysis, preprocessing, and validating an
+image-to-feature extraction workflow to support future vision-
+language modelling.
+II. PROBLEM DEFINITION
+The core task addressed in this study is the automated
+generation of radiology “Findings” from a single input chest
+X-ray image [10]. This is formulated as an image-to-text
+generation task in a medical context where a system must learn
+to translate monochromatic, high-resolution visual features
+into structured clinical narratives [11]. The input consists of
+2D radiographs (typically posteroanterior or anteroposterior
+views), and the target output is the descriptive findings section
+typically authored by a radiologist [1], [10].
+This task is particularly challenging due to the “modality
+gap” between grayscale visual cues and the complex, domain-
+specific terminology required for medical reporting [2], [8].
+Unlike natural image captioning, radiology report generation
+must prioritize abnormality-specific feature extraction over
+generic attributes to ensure diagnostic accuracy [4], [11].
+Furthermore, models must navigate severe data imbalances,
+where normal cases are overrepresented, and avoid halluci-
+nations—the generation of clinically plausible but factually
+incorrect findings not supported by visual evidence [7], [9].
+Addressing these challenges is critical to alleviating the in-
+creasing cognitive load and reporting delays currently straining
+healthcare systems [3], [5].
+III. MINI LITERATURE SURVEY
+Recent research in Medical Report Generation (MRG) has
+transitioned from early CNN-RNN architectures toward so-
+phisticated multi-modal Vision-Language Models (VLMs) [1],
+[11]. State-of-the-art (SOTA) work focuses on three primary
+directions: heterogeneous visual feature enhancement, halluci-
+nation mitigation, and training-time curriculum strategies.
+Advanced architectures increasingly utilize multi-encoder
+strategies to bridge the modality gap. META-CXR (2025)
+employs a multi-encoder setup (CNN, ViT, and Swin Trans-
+formers) aligned via a META-Former module to produce
+abnormality-guided reports [4]. Similarly, MediVLM (2025)
+extracts salient anatomical regions using a pre-trained Faster
+R-CNN detector to facilitate patient severity scoring [2].
+Beyond global features, models such as CheXReport (2024)
+utilize Swin Transformers to capture long-range visual de-
+pendencies that standard CNNs may overlook [11]. Recent
+benchmarks have further validated the clinical readiness of
+foundational models such as MedGemma (2025) and MAIRA-
+
+2 (2024) in high-pressure environments like emergency depart-
+ments [3].
+Hallucination mitigation has emerged as a critical safety
+requirement [12]. FactCheXcker (2025) addresses “measure-
+ment hallucinations” through a query-code-update pipeline
+that verifies numerical values using specialized APIs [9].
+In parallel, Semantically Decoupled Latent Steering (SDLS)
+(2026) targets “prior-comparison hallucinations” by identify-
+ing historical language biases in the latent space and steering
+model activations toward current visual evidence [8]. These
+interventions improve clinical trust by ensuring narratives are
+strictly grounded in visual data [8], [9].
+Training paradigms have also evolved to handle linguistic
+complexity. GIT-CXR (2025) introduces curriculum learning
+based on report length, demonstrating that training on simpler
+reports before progressing to long-range clinical dependencies
+significantly improves performance [5]. Other foundational
+models, such as Flamingo-CXR (2024), highlight the neces-
+sity of expert evaluation, showing that even high-performing
+models benefit from expert-in-the-loop collaboration [6]. Our
+project locates itself within this landscape by establishing a
+functional baseline using the IU dataset [10], serving as a
+roadmap for integrating these advanced VLM techniques [1].
+IV. EXPLORATORY DATA ANALYSIS
+The Indiana University (IU) Chest X-Ray dataset was
+used for this study since it provides a paired image-report
+structure, which makes it suitable for vision-language tasks
+[1], [11]. The dataset consists of chest radiographs along with
+corresponding radiology reports, including structured Findings
+and Impression sections. Each report corresponds to two chest
+x-rays, one frontal and one lateral.
+Initial exploration focused on validating data integrity and
+understanding dataset structure [10]. The dataset contains
+thousands of grayscale radiographs, with each study typically
+including frontal and/or lateral projections. Sample inspection
+confirmed variability in image dimensions and intensity distri-
+butions, highlighting the need for standardised preprocessing.
+Textual analysis of the reports indicated that findings are
+relatively concise and domain-specific, containing medical ter-
+minology describing anatomical structures and abnormalities.
+This supports the feasibility of treating the task as a controlled
+image-to-text generation problem in later stages.
+Preprocessing was implemented to ensure compatibility
+with deep learning models. All images were resized to
+224 × 224 pixels and normalised to account for variation in
+acquisition conditions [10]. The processed data was converted
+into PyTorch tensors and organised using custom Dataset
+and DataLoader classes to enable efficient batching during
+training [10].
+Overall, the exploratory analysis established a clean and
+consistent data pipeline, ensuring that both image and text
+modalities are properly aligned and ready for model input in
+the baseline experiment.
+Fig. 1. Example chest X-ray projections from the IU dataset showing frontal
+(left) and lateral (right) views.
+V. BASELINE AND PROOF OF CONCEPT
+The baseline experiment was designed to validate a func-
+tional image-to-feature pipeline using transfer learning. A pre-
+trained ResNet18 model was employed as the visual encoder,
+with its classification head removed to extract high-level
+feature representations from chest X-ray images [1], [11]. The
+backbone was kept frozen to leverage general visual features
+while avoiding overfitting due to the limited dataset size [10].
+Each input image was passed through the encoder to pro-
+duce a fixed-length feature vector, which was then projected
+into a 256-dimensional embedding space using a fully con-
+nected layer [10]. This embedding serves as an intermediate
+representation for future integration with a language decoder
+in subsequent stages.
+The primary objective of this baseline was to verify end-
+to-end pipeline integrity rather than optimise task-specific
+performance. A placeholder loss function was implemented to
+ensure that gradients propagate correctly through the network
+and that the training loop operates without errors.
+During training, the model completed multiple epochs
+without instability [10]. The loss values remained within a
+consistent range, indicating stable execution of the forward
+and backward passes [10]. This confirms that data loading,
+preprocessing, batching, and model integration are functioning
+as expected.
+Fig. 2.
+Training loss curve demonstrating stable pipeline execution across
+epochs.
+
+To further validate the quality of the extracted features,
+dimensionality reduction techniques such as PCA and t-SNE
+were applied to the learned embeddings [10]. The resulting vi-
+sualisations showed consistent clustering patterns, suggesting
+that the encoder produces structured and meaningful feature
+representations from the input images [10].
+Fig. 3. t-SNE visualisation of image embeddings showing structured feature
+representation.
+VI. NEXT STEPS
+Building on the validated baseline pipeline, the next phase
+will focus on extending the model toward full image-to-
+text report generation [10], [11]. This includes integrating a
+language decoder to generate clinical findings from image
+embeddings and fine-tuning the visual encoder for domain-
+specific feature learning [5], [10].
+Additionally, more meaningful evaluation metrics such as
+BLEU or ROUGE will be introduced to assess the quality
+of generated reports [1], [12]. Techniques to mitigate halluci-
+nations and improve alignment between visual evidence and
+generated text will also be explored [7]–[9].
+These improvements aim to transition the current pipeline
+from feature extraction toward a complete vision-language
+model for automated radiology reporting.
+REFERENCES
+[1] M. Salhi and M. A. Akhloufi, “Recent Progress in Deep Learning for
+Chest X-Ray Report Generation,” BioMedInformatics, vol. 6, no. 3, pp.
+1-33, Jan. 2026.
+[2] D. Goswami, R. Subedi, and S. Chakraborty, “MediVLM: A Vision Lan-
+guage Model for Radiology Report Generation from Medical Images,”
+in Proc. Findings of the Association for Computational Linguistics:
+EMNLP 2025, 2025, pp. 10287–10300.
+[3] W. H. Lim, J. Y. Lee, J. H. Lee, S. Kim, and H. Kim, “Comparative
+Evaluation of Generative AI Models for Chest Radiograph Report
+Generation in the Emergency Department,” Original Research, Seoul
+National University Hospital, 2025.
+[4] D. Edirisinghe, W. Nimalsiri, M. Hennayake, D. Meedeniya, and G. Lim,
+“Chest X-Ray Report Generation Using Abnormality Guided Vision
+Language Model,” IEEE Access, vol. 13, pp. 1-20, Sept. 2025.
+[5] I. Sˆırbu, I.-R. Sˆırbu, J. Bogojeska, and T. Rebedea, “GIT-CXR: End-
+to-End Transformer for Chest X-Ray Report Generation,” Information,
+vol. 16, no. 7, 524, June 2025.
+[6] R. Tanno et al., “Collaboration between clinicians and vision–language
+models in radiology report generation,” Nature Medicine, vol. 31, no. 2,
+pp. 599–608, Nov. 2024.
+[7] R. Zhao, R. Xia, and P. Li, “Hallucination Mitigating for Medical Report
+Generation,” Nanjing University of Aeronautics and Astronautics, 2026.
+[8] A. Li et al., “Suppressing Prior-Comparison Hallucinations in Radiology
+Report Generation via Semantically Decoupled Latent Steering,” IEEE
+Transactions on Pattern Analysis and Machine Intelligence, 2026.
+[9] A. Heiman, X. Zhang, E. Chen, S. E. Kim, and P. Rajpurkar, “FactCheX-
+cker: Mitigating Measurement Hallucinations in Chest X-ray Report
+Generation Models,” in Proc. IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR) 2025, 2025.
+[10] D. R. Aucharaz, N. Dzhunushova, M. Zhyrgalbekova, and T. Mukher-
+jee, “VLM-Powered Automated Medical Reporting: Exploratory Data
+Analysis and Baseline Model,” Jupyter Notebook, Group 4 Project 6,
+SP Jain School of Global Management, Mar. 2026.
+[11] Y. Li, C. Kong, G. Zhao, and Z. Zhao, “Automatic radiology report
+generation with deep learning: a comprehensive review of methods and
+advances,” Artificial Intelligence Review, vol. 58, 344, Aug. 2025.
+[12] I. Hartsock and G. Rasool, “Vision-language models for medical re-
+port generation and visual question answering: a review,” Frontiers in
+Artificial Intelligence, vol. 7, 1430984, Nov. 2024.

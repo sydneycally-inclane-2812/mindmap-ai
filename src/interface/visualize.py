@@ -29,8 +29,8 @@ def get_sample_graph_data() -> dict:
     }
 
 
-def build_graph_from_nodes_edges(data: dict) -> nx.Graph:
-    G = nx.Graph()
+def build_graph_from_nodes_edges(data: dict) -> nx.DiGraph:
+    G = nx.DiGraph()
 
     if not isinstance(data, dict):
         return G
@@ -42,9 +42,13 @@ def build_graph_from_nodes_edges(data: dict) -> nx.Graph:
         if isinstance(node, dict):
             node_id = node.get("id") or node.get("label")
             if node_id is not None:
-                G.add_node(str(node_id))
+                G.add_node(
+                    str(node_id),
+                    label=str(node.get("label", node_id)),
+                    title=str(node.get("title", node.get("label", node_id))),
+                )
         else:
-            G.add_node(str(node))
+            G.add_node(str(node), label=str(node), title=str(node))
 
     for edge in edges:
         if not isinstance(edge, dict):
@@ -60,24 +64,24 @@ def build_graph_from_nodes_edges(data: dict) -> nx.Graph:
     return G
 
 
-def _build_pyvis_html(G: nx.Graph) -> str:
+def _build_pyvis_html(G: nx.DiGraph) -> str:
     net = Network(
         height="650px",
         width="100%",
         bgcolor="#111111",
         font_color="white",
-        directed=False,
+        directed=True,
     )
 
     net.force_atlas_2based()
 
-    for node in G.nodes():
+    for node, attrs in G.nodes(data=True):
         degree = G.degree[node]
         size = 18 + degree * 4
         net.add_node(
             node,
-            label=str(node),
-            title=str(node),
+            label=attrs.get("label", str(node)),
+            title=attrs.get("title", str(node)),
             size=size,
         )
 
@@ -98,7 +102,7 @@ def _build_pyvis_html(G: nx.Graph) -> str:
     return html
 
 
-def _show_graph_matplotlib(G: nx.Graph) -> None:
+def _show_graph_matplotlib(G: nx.DiGraph) -> None:
     fig, ax = plt.subplots(figsize=(12, 8))
     pos = nx.spring_layout(G, seed=42)
 
@@ -109,6 +113,7 @@ def _show_graph_matplotlib(G: nx.Graph) -> None:
         ax=ax,
         node_size=2200,
         font_size=10,
+        arrows=True,
     )
 
     edge_labels = nx.get_edge_attributes(G, "label")
@@ -116,9 +121,10 @@ def _show_graph_matplotlib(G: nx.Graph) -> None:
         nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax, font_size=8)
 
     st.pyplot(fig)
+    plt.close(fig)
 
 
-def show_graph(G: nx.Graph, prefer_pyvis: bool = True) -> None:
+def show_graph(G: nx.DiGraph, prefer_pyvis: bool = True) -> None:
     if G.number_of_nodes() == 0:
         st.warning("Graph is empty.")
         return
@@ -153,7 +159,7 @@ def render_mindmap_ui(
     if show_debug:
         st.write(f"Nodes in graph: {G.number_of_nodes()}")
         st.write(f"Edges in graph: {G.number_of_edges()}")
-        st.write("Graph nodes:", list(G.nodes()))
+        st.write("Graph nodes:", list(G.nodes(data=True)))
         st.write("Graph edges:", list(G.edges(data=True)))
 
     if G.number_of_nodes() == 0:
