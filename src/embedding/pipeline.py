@@ -206,7 +206,8 @@ def get_graph_summary(graph_store: Neo4jGraphStore) -> Dict[str, Any]:
             WITH n, (COUNT {(n)-[]->()} + COUNT {(n)<-[]-()}) as degree
             RETURN avg(degree) as avg_degree"""
         ).single()
-        avg_degree = avg_degree_result["avg_degree"] if avg_degree_result else 0
+        raw_avg_degree = avg_degree_result["avg_degree"] if avg_degree_result else None
+        avg_degree = float(raw_avg_degree) if raw_avg_degree is not None else 0.0
     
     return {
         "num_nodes": stats["num_nodes"],

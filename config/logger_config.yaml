@@ -25,7 +25,7 @@ loggers:
     handlers: [console, file_handler]
     propagate: False
   prod:
-    level: INFO
+    level: DEBUG
     handlers: [console]
     propagate: False
     
